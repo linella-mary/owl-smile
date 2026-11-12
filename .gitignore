@@ -1,0 +1,9 @@
+node_modules/
+.output/
+.output-e2e/
+.wxt/
+.env
+.env.*
+!.env.example
+*.log
+.spike/

@@ -1,0 +1,38 @@
+{
+  "name": "owl-smile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Свои смайлы, иконки и эффекты ников для Twitch и VK Live",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "spike:gitflic": "tsx scripts/spike-gitflic.ts",
+    "postinstall": "wxt prepare",
+    "e2e": "tsx scripts/e2e.ts",
+    "seed": "tsx scripts/seed.ts",
+    "check:live": "tsx scripts/check-live.ts",
+    "release": "tsx scripts/release.ts"
+  },
+  "dependencies": {
+    "@isomorphic-git/lightning-fs": "^4.10.5",
+    "buffer": "^6.0.3",
+    "gifenc": "^1.0.3",
+    "isomorphic-git": "^1.44.13",
+    "preact": "^11.2.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.6",
+    "happy-dom": "^21.0.4",
+    "playwright": "^1.65.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0",
+    "wxt": "^0.21.5"
+  }
+}

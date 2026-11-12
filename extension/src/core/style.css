@@ -1,0 +1,77 @@
+/* Смайлы */
+img.owl-emote {
+  height: 28px;
+  width: auto;
+  max-width: 112px;
+  vertical-align: middle;
+  margin: -4px 1px;
+  display: inline-block;
+  object-fit: contain;
+}
+
+/* Иконки у ника */
+.owl-badges {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+img.owl-badge {
+  width: 18px;
+  height: 18px;
+  vertical-align: middle;
+  object-fit: contain;
+}
+
+/* Эффекты ников: пресеты + CSS-переменные (ставятся из applyPaint) */
+.owl-paint--solid {
+  color: var(--owl-c1) !important;
+}
+
+.owl-paint--gradient,
+.owl-paint--shimmer,
+.owl-paint--rainbow {
+  background-image: linear-gradient(var(--owl-angle, 90deg), var(--owl-colors));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent;
+}
+
+.owl-paint--shimmer {
+  background-image: linear-gradient(90deg, var(--owl-colors), var(--owl-c1));
+  background-size: 200% 100%;
+  animation: owl-shimmer var(--owl-speed, 3s) linear infinite;
+}
+
+.owl-paint--rainbow {
+  background-image: linear-gradient(90deg, #ff004c, #ff9a00, #ffe600, #2bff00, #00c8ff, #7a00ff, #ff004c);
+  background-size: 200% 100%;
+  animation: owl-shimmer var(--owl-speed, 4s) linear infinite;
+}
+
+@keyframes owl-shimmer {
+  from { background-position: 0% 50%; }
+  to { background-position: -200% 50%; }
+}
+
+.owl-paint--glow {
+  color: var(--owl-c1) !important;
+  text-shadow: 0 0 4px var(--owl-c2), 0 0 10px var(--owl-c2);
+}
+
+.owl-paint--flicker {
+  color: var(--owl-c1) !important;
+  text-shadow: 0 0 6px var(--owl-c2);
+  animation: owl-flicker var(--owl-speed, 2s) steps(1) infinite;
+}
+
+@keyframes owl-flicker {
+  0%, 44%, 56%, 64%, 100% { opacity: 1; }
+  48% { opacity: 0.35; }
+  60% { opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .owl-paint { animation: none !important; }
+}
