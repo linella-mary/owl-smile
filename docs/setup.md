@@ -28,13 +28,12 @@
 
 Один раз:
 1. Создайте на GitFlic **публичный** проект `owl-smile` — пустой, без README.
-2. Создайте личный API-токен: «Профиль → API токены» с правами на проект (`PROJECT_WRITE`, `PROJECT_EDIT`; права на релизы в документации не указаны). Вставьте его в `extension/.env` → `GITFLIC_API_TOKEN`.
-3. Подключите проект и отправьте код:
-   ```bash
-   git remote add origin https://gitflic.ru/project/ju1iana/owl-smile.git
-   git push -u origin master
-   ```
-   Если git ругается на «dubious ownership», выполните: `git config --global --add safe.directory D:/_DEV/owl_smile`.
+2. Личный API-токен («Профиль → API токены» — именно в профиле, а не в настройках проекта) → `extension/.env` → `GITFLIC_API_TOKEN`. Им создаются релизы.
+3. Токен развёртывания проекта `owl-smile` → `GITFLIC_CODE_DEPLOY_TOKEN`. Им скрипт пушит код и теги.
+
+Сделано: код в `master`, теги `v0.1.0` и `v0.1.1`, релиз `v0.1.1` с архивом. Архив скачивается без входа на GitFlic по ссылке вида `…/release/<id релиза>/<id файла>/download` (проверено).
+
+Если git ругается на «dubious ownership»: `git config --global --add safe.directory D:/_DEV/owl_smile`.
 
 Каждый релиз:
 ```bash
@@ -57,6 +56,7 @@ npm run release -- 0.2.0 "Что нового в этой версии"
 | `npm run e2e` | Chromium с расширением: синхронизация, чат Twitch, пикер, Tab, ключ, загрузка |
 | `npm run spike:gitflic` | Node ↔ настоящий GitFlic: чтение, push, гонка, очистка |
 | `npm run build` + `npm run check:live -- --write` | рабочая сборка в Chromium ↔ настоящий GitFlic: синхронизация, неверный и верный ключ, загрузка и удаление |
+| `npm run check:release-api -- vX.Y.Z файл.zip` | API релизов: пре-релиз на теге без релиза → загрузка → скачивание без входа → удаление |
 | `npm run compile` | проверка типов |
 | `npm run dev` | WXT dev-режим с автоперезагрузкой |
 

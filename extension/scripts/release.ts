@@ -14,6 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { GitflicApi } from './gitflic-api';
 
 if (fs.existsSync('.env')) process.loadEnvFile('.env');
 const owner = process.env.WXT_GITFLIC_OWNER ?? '';
@@ -21,7 +22,6 @@ const codeRepo = process.env.GITFLIC_CODE_REPO ?? '';
 const apiToken = process.env.GITFLIC_API_TOKEN ?? '';
 const codeDeployToken = process.env.GITFLIC_CODE_DEPLOY_TOKEN ?? '';
 const pushUser = process.env.WXT_GITFLIC_USER || owner;
-const API = 'https://api.gitflic.ru';
 
 const [versionArg, notesArg] = process.argv.slice(2);
 const root = path.resolve('..');
@@ -34,17 +34,6 @@ function fail(msg: string): never {
 /** git в корне проекта (safe.directory — диск без владельцев файлов). */
 const git = (...args: string[]) =>
   execFileSync('git', ['-c', `safe.directory=${root.replace(/\\/g, '/')}`, ...args], { cwd: root, encoding: 'utf8' }).trim();
-
-async function api(method: string, url: string, body?: BodyInit, json = true): Promise<any> {
-  const res = await fetch(API + url, {
-    method,
-    headers: { Authorization: `token ${apiToken}`, ...(json && body ? { 'Content-Type': 'application/json' } : {}) },
-    body,
-  });
-  const text = await res.text();
-  if (!res.ok) fail(`API ${method} ${url} → ${res.status}: ${text.slice(0, 500)}`);
-  return text ? JSON.parse(text) : null;
-}
 
 async function main() {
   if (!owner || !codeRepo) fail('Заполните WXT_GITFLIC_OWNER и GITFLIC_CODE_REPO в extension/.env');
@@ -110,22 +99,14 @@ async function main() {
   }
 
   // 5. Релиз
-  const base = `/project/${owner}/${codeRepo}/release`;
-  const release = await api('POST', base, JSON.stringify({
-    title: `Owl Smile ${version}`,
-    description,
-    tagName: tag,
-    preRelease: false,
-    attachProjectArchive: false,
-  }));
-  const uuid: string | undefined = release?.uuid ?? release?.id ?? release?.releaseUuid;
-  if (!uuid) fail(`Не понял ответ API при создании релиза: ${JSON.stringify(release).slice(0, 300)}`);
-
-  const form = new FormData();
-  form.append('files', new Blob([fs.readFileSync(path.join(outDir, zipName))], { type: 'application/zip' }), zipName);
-  await api('POST', `${base}/${uuid}/file`, form, false);
+  const api = new GitflicApi(apiToken, owner, codeRepo);
+  const id = await api.createRelease({ tag, title: `Owl Smile ${version}`, description });
+  await api.uploadFile(id, path.join(outDir, zipName));
+  const files = await api.files(id);
+  if (!files.some((f) => f.name === zipName)) fail('Файл не появился в релизе — проверьте страницу релизов');
 
   console.log(`\n✔ Релиз ${tag} опубликован: https://gitflic.ru/project/${owner}/${codeRepo}/release`);
+  for (const f of files) console.log(`  скачать без входа: ${f.downloadUrl}`);
 }
 
-void main();
+main().catch((e) => fail(e instanceof Error ? e.message : String(e)));

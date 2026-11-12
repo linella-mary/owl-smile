@@ -15,7 +15,8 @@
     "e2e": "tsx scripts/e2e.ts",
     "seed": "tsx scripts/seed.ts",
     "check:live": "tsx scripts/check-live.ts",
-    "release": "tsx scripts/release.ts"
+    "release": "tsx scripts/release.ts",
+    "check:release-api": "tsx scripts/check-release-api.ts"
   },
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.10.5",
