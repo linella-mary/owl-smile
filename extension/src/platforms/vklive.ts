@@ -1,0 +1,52 @@
+import { normalizeNick } from '../shared/ids';
+import { textNodesIn, type ChatAdapter } from './types';
+
+/**
+ * VK Live (live.vkvideo.ru). Разметка снята с живой страницы 2026-11-12.
+ * Классы — CSS-модули с хешем в конце (ChatMessage_root_UHMEJ), хеш может меняться между релизами,
+ * поэтому опираемся на data-атрибуты и на стабильную часть имени класса ([class*="…_"]).
+ *
+ *   [data-role="messageContainer"]           — сообщение
+ *     [data-role="messageAuthor"]            — блок автора: значки VK + ник
+ *       [class*="ChatMessageAuthorPanel_name_"]  — «Ник:» (с двоеточием в конце)
+ *     [data-role="markup"]                   — текст сообщения
+ *
+ * Поле ввода (видно только после входа) — Editor.js внутри ChatPublisher:
+ *   [class*="Publisher_editor_"] [contenteditable="true"], кнопка смайлов — [class*="Publisher_smileContainer_"].
+ */
+export const vkliveAdapter: ChatAdapter = {
+  platform: 'vk',
+  messageSelector: '[data-role="messageContainer"]',
+
+  getAuthor(msg) {
+    const raw = this.getUsernameElement(msg)?.textContent;
+    return raw ? normalizeNick(raw) : null;
+  },
+
+  getUsernameElement(msg) {
+    return msg.querySelector<HTMLElement>('[data-role="messageAuthor"] [class*="ChatMessageAuthorPanel_name_"]');
+  },
+
+  getBadgeAnchor(msg) {
+    return this.getUsernameElement(msg);
+  },
+
+  getTextNodes(msg) {
+    return textNodesIn(msg.querySelectorAll('[data-role="markup"]'));
+  },
+
+  getChatInput() {
+    return (
+      document.querySelector<HTMLElement>('[class*="Publisher_editor_"] [contenteditable="true"]') ??
+      document.querySelector<HTMLElement>('[class*="ChatPublisher_"] [contenteditable="true"]')
+    );
+  },
+
+  getPickerAnchor() {
+    return (
+      document.querySelector('[class*="Publisher_smileContainer_"]') ??
+      document.querySelector('[class*="ChatPublisher_smileSelector_"]') ??
+      document.querySelector('[class*="Publisher_sendContainer_"]')
+    );
+  },
+};

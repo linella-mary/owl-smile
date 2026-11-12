@@ -17,7 +17,7 @@ export default defineConfig({
   manifest: {
     name: 'Owl Smile',
     description: 'Свои смайлы, иконки и эффекты ников в чатах Twitch и VK Live',
-    permissions: ['storage', 'unlimitedStorage', 'alarms'],
+    permissions: ['storage', 'unlimitedStorage', 'alarms', 'scripting'],
     host_permissions: [
       'https://gitflic.ru/*',
       'https://*.twitch.tv/*',

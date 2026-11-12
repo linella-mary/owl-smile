@@ -28,9 +28,47 @@ const TWITCH_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head>
   </div>
 </div>
 <div class="chat-input">
-  <div data-a-target="chat-input" contenteditable="true" style="min-height:20px;border:1px solid #555"></div>
+  <div data-a-target="chat-input" contenteditable="true" role="textbox" style="min-height:20px;border:1px solid #555"></div>
   <div><button data-a-target="emote-picker-button">😀</button></div>
 </div>
+<script>
+  // Редактор «как Slate»: текст живёт в модели и меняется только через beforeinput.
+  // Изменения DOM в обход модели (execCommand без beforeinput) откатываются —
+  // в чат ушло бы содержимое модели, а не то, что было видно на экране.
+  (() => {
+    const ed = document.querySelector('[data-a-target="chat-input"]');
+    let model = '';
+    const render = () => {
+      ed.textContent = model;
+      if (document.activeElement === ed) {
+        const r = document.createRange();
+        r.selectNodeContents(ed);
+        r.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(r);
+      }
+    };
+    ed.addEventListener('beforeinput', (e) => {
+      e.preventDefault();
+      if (e.inputType === 'insertText') model += e.data;
+      else if (e.inputType === 'deleteContentBackward') model = model.slice(0, -1);
+      render();
+    });
+    ed.addEventListener('input', render);
+    window.__owlModel = () => model;
+    window.__owlReset = () => { model = ''; render(); };
+  })();
+</script>
+</body></html>`;
+
+const VK_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><body style="background:#18181b;color:#fff">
+<div class="Chat_root_tUBSs"><div class="ChatBoxBase_root_k1P9S" id="chat">
+  <div class="ChatMessage_root_UHMEJ MessagesList_message_mHGaj undefined" data-test-id="ChatMessage:root" data-role="messageContainer" data-message-id="1"><div class="ChatMessage_message_r1jzC"><div class="ChatMessage_publishTime_EzWt_">22:13</div><div data-role="messageMainContent"><div class="ChatMessageAuthorPanel_author_qc2nK" data-role="messageAuthor" data-test-id="ChatMessage:author"><div class="ChatBadge_root_IHNlp" title="Модератор"><div class="Badge_small_BOk2J"><img alt="Модератор" class="ChatBadge_image_FMyoR" height="16" width="16" src="data:,"></div></div> <span class="ChatMessageAuthorPanel_name_w3ZOm" style="color: rgb(184, 170, 255);">Данил Кузнецов.:</span></div><span class="BlockRenderer_markup_Wtipg BlockRenderer_noIndent_yWqyP" data-role="markup">всем привет CatJam</span></div></div></div>
+</div></div>
+<div class="ChatPublisher_root_xCqwT"><div class="Publisher_root_OEAeu">
+  <div class="Publisher_editorWrapper_ruJa3"><div class="Publisher_editor_lrEMS"><div class="codex-editor"><div class="ce-block"><div class="ce-paragraph cdx-block" contenteditable="true" style="min-height:20px;border:1px solid #555"></div></div></div></div></div>
+  <div class="Publisher_actionsContainer_nXHDH"><div class="Publisher_smileContainer_MjJHi"><button>☺</button></div></div>
+</div></div>
 </body></html>`;
 
 /** Анимированный GIF: двигающийся круг на прозрачном фоне. */
@@ -91,6 +129,7 @@ async function main() {
     'badges/founder.json': JSON.stringify({ id: 'founder', title: 'Основатель', image: IMG, author: 'seed' }),
     'paints/gold.json': JSON.stringify({ id: 'gold', title: 'Золото', preset: 'shimmer', colors: ['#ffcc00', '#ff5e00'] }),
     'users/twitch/owl_viewer.json': JSON.stringify({ badges: ['founder'], paint: 'gold' }),
+    'users/vk/данил кузнецов..json': JSON.stringify({ badges: ['founder'], paint: 'gold' }),
   });
 
   console.log('Сборка расширения с локальным сервером…');
@@ -144,20 +183,55 @@ async function main() {
     await page.click('#owl-picker-btn');
     if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-picker.png') });
     await page.locator('button[title="CatJam"]').click();
-    const inputText = await page.$eval('[data-a-target="chat-input"]', (el) => el.textContent);
-    check('кнопка смайлов вставляет код', inputText?.trim() === 'CatJam', JSON.stringify(inputText));
+    // Проверяем модель редактора — то, что реально уйдёт в чат.
+    const model = () => page.evaluate(() => (window as unknown as { __owlModel(): string }).__owlModel());
+    const picked = await waitFor(async () => ((await model()) === 'CatJam ' ? 'ok' : null), 3000);
+    check('кнопка смайлов вставляет код (в модель редактора)', Boolean(picked), JSON.stringify(await model()));
 
     // 4. Tab-автодополнение
-    await page.$eval('[data-a-target="chat-input"]', (el) => (el.textContent = ''));
+    await page.evaluate(() => (window as unknown as { __owlReset(): void }).__owlReset());
     await page.click('[data-a-target="chat-input"]');
     await page.keyboard.type('hi Cat');
-    const inputValue = () => page.$eval('[data-a-target="chat-input"]', (el) => el.textContent!.replace(/ /g, ' '));
+    const inputValue = model;
     await page.keyboard.press('Tab');
     const completed = await inputValue();
-    check('Tab-автодополнение', completed === 'hi CatJam ', JSON.stringify(completed));
+    check('Tab-автодополнение (в модель редактора)', completed === 'hi CatJam ', JSON.stringify(completed));
     await page.keyboard.press('Tab');
     const cycled = await inputValue();
     check('повторный Tab — следующий вариант', cycled === 'hi CatJam2 ', JSON.stringify(cycled));
+    await page.keyboard.type('x');
+    check('дальше можно печатать', (await model()) === 'hi CatJam2 x', JSON.stringify(await model()));
+
+    // 4b. VK Live (разметка с live.vkvideo.ru, редактор Editor.js — обычный contenteditable)
+    await ctx.route('https://live.vkvideo.ru/**', (r) => r.fulfill({ contentType: 'text/html', body: VK_FIXTURE }));
+    const vk: Page = await ctx.newPage();
+    await vk.goto('https://live.vkvideo.ru/somechannel');
+    check('VK: смайл в сообщении', Boolean(await waitFor(() => vk.$('[data-role="markup"] img.owl-emote[alt="CatJam"]'))));
+    check('VK: иконка перед ником', Boolean(await vk.$('[data-role="messageAuthor"] .owl-badges + [class*="ChatMessageAuthorPanel_name_"]')));
+    check('VK: эффект на ник с кириллицей', await vk.$eval('[class*="ChatMessageAuthorPanel_name_"]', (el) => el.classList.contains('owl-paint--shimmer')));
+    await vk.evaluate(() => {
+      const tpl = document.querySelector('[data-role="messageContainer"]')!.cloneNode(true) as HTMLElement;
+      tpl.querySelectorAll('.owl-badges, img.owl-emote').forEach((n) => n.remove());
+      const name = tpl.querySelector('[class*="ChatMessageAuthorPanel_name_"]') as HTMLElement;
+      name.className = 'ChatMessageAuthorPanel_name_w3ZOm';
+      name.removeAttribute('style');
+      name.textContent = 'Кто-то другой:';
+      tpl.querySelector('[data-role="markup"]')!.textContent = 'CatJam2 ура';
+      tpl.dataset.messageId = '2';
+      delete tpl.dataset.owl;
+      document.getElementById('chat')!.append(tpl);
+    });
+    check('VK: новое сообщение', Boolean(await waitFor(() => vk.$('[data-message-id="2"] img.owl-emote[alt="CatJam2"]'))));
+    check('VK: чужой ник без оформления', !(await vk.$('[data-message-id="2"] .owl-badges, [data-message-id="2"] .owl-paint')));
+    check('VK: кнопка смайлов рядом с их смайлами', Boolean(await waitFor(() => vk.$('#owl-picker-btn + [class*="Publisher_smileContainer_"]'))));
+    await vk.click('#owl-picker-btn');
+    check('VK: «Недавние» помнят смайл из Twitch', Boolean(await vk.$('text=Недавние')));
+    await vk.locator('button[title="CatJam"]').first().click();
+    const vkText = () => vk.$eval('.ce-paragraph', (el) => el.textContent!.replace(/ /g, ' '));
+    check('VK: кнопка смайлов вставляет код', Boolean(await waitFor(async () => ((await vkText()) === 'CatJam ' ? 'ok' : null), 3000)), JSON.stringify(await vkText()));
+    await vk.keyboard.type('Ca');
+    await vk.keyboard.press('Tab');
+    check('VK: Tab-автодополнение', (await vkText()) === 'CatJam CatJam ', JSON.stringify(await vkText()));
 
     // 5. Загрузка смайла через страницу manage
     const manage = await ctx.newPage();

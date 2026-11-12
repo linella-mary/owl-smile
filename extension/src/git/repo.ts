@@ -8,6 +8,8 @@ import {
   PaintSchema,
   PLATFORMS,
   UserSchema,
+  isValidNick,
+  normalizeNick,
   userKey,
   type Badge,
   type Emote,
@@ -166,7 +168,7 @@ export class DataRepo {
     for (const [, v] of await this.readJsonDir(head, 'paints', PaintSchema, problems, (n, v) => n === v.id))
       snap.paints[v.id] = v;
     for (const platform of PLATFORMS) {
-      for (const [nick, v] of await this.readJsonDir(head, `users/${platform}`, UserSchema, problems, (n) => n === n.toLowerCase()))
+      for (const [nick, v] of await this.readJsonDir(head, `users/${platform}`, UserSchema, problems, (n) => n === normalizeNick(n) && isValidNick(platform, n)))
         snap.users[userKey(platform, nick)] = v;
     }
     return snap;

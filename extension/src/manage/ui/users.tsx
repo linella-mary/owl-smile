@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { NICK_RE, PLATFORMS, PLATFORM_TITLES, type Platform } from '../../shared/ids';
+import { isValidNick, normalizeNick, PLATFORMS, PLATFORM_TITLES, type Platform } from '../../shared/ids';
 import { setUser } from '../ops';
 import { useRunner, type CacheView } from './common';
 import { PaintedName } from './paints';
@@ -14,10 +14,12 @@ export function UsersTab({ cache }: { cache: CacheView }) {
   const allBadges = Object.entries(cache.index?.badges ?? {});
   const allPaints = Object.values(cache.index?.paints ?? {});
   const users = Object.entries(cache.index?.users ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  const n = nick.trim().toLowerCase();
+  const n = normalizeNick(nick);
+  const nickOk = isValidNick(platform, n);
 
   const edit = (key: string) => {
-    const [p, name] = key.split(':') as [Platform, string];
+    const p = key.slice(0, key.indexOf(':')) as Platform;
+    const name = key.slice(key.indexOf(':') + 1);
     const u = cache.index!.users[key]!;
     setPlatform(p);
     setNick(name);
@@ -38,9 +40,9 @@ export function UsersTab({ cache }: { cache: CacheView }) {
           <select value={platform} onChange={(e) => setPlatform(e.currentTarget.value as Platform)}>
             {PLATFORMS.map((p) => <option key={p} value={p}>{PLATFORM_TITLES[p]}</option>)}
           </select>
-          <input class="grow" value={nick} placeholder={platform === 'twitch' ? 'логин на Twitch' : 'ник в VK Live'} onInput={(e) => setNick(e.currentTarget.value)} />
+          <input class="grow" value={nick} placeholder={platform === 'twitch' ? 'логин на Twitch, например owl_viewer' : 'ник в VK Live как в чате, например Данил Кузнецов'} onInput={(e) => setNick(e.currentTarget.value)} />
         </div>
-        {nick && !NICK_RE.test(n) && <div class="err small">Некорректный ник</div>}
+        {nick && !nickOk && <div class="err small">{platform === 'twitch' ? 'Логин Twitch: латиница, цифры и _ (как в адресе канала)' : 'Ник VK Live: как в чате, без двоеточия'}</div>}
 
         <div class="field">
           <span>Иконки (до 3)</span>
@@ -71,7 +73,7 @@ export function UsersTab({ cache }: { cache: CacheView }) {
             {badges.map((id) => cache.index?.badges[id] && <img key={id} class="owl-badge" src={cache.images[cache.index.badges[id].img]} alt="" />)}{' '}
             <PaintedName paint={paint ? cache.index?.paints[paint] : null} name={nick || 'ник'} />: привет!
           </span>
-          <button disabled={!NICK_RE.test(n) || runner.busy}
+          <button disabled={!nickOk || runner.busy}
             onClick={() => void save(paint ? { badges, paint } : { badges }, `Оформление ${PLATFORM_TITLES[platform]}:${n}`)}>
             Сохранить
           </button>
@@ -81,7 +83,8 @@ export function UsersTab({ cache }: { cache: CacheView }) {
       <h2>Оформленные зрители · {users.length}</h2>
       <div class="list">
         {users.map(([key, u]) => {
-          const [p, name] = key.split(':') as [Platform, string];
+          const p = key.slice(0, key.indexOf(':')) as Platform;
+          const name = key.slice(key.indexOf(':') + 1);
           return (
             <div class="list-row" key={key}>
               <span class="tag">{PLATFORM_TITLES[p]}</span>

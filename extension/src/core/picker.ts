@@ -7,8 +7,39 @@ const BTN_ID = 'owl-picker-btn';
 const K_RECENT = 'owl:recent';
 const MAX_RECENT = 16;
 
-/** Вставка текста в поле ввода чата так, чтобы редактор площадки (Slate/React) это увидел. */
-export function insertIntoChat(adapter: ChatAdapter, code: string): boolean {
+/**
+ * Отправляет редактору событие beforeinput. true — редактор обработал его сам (preventDefault).
+ * Так работают редакторы с собственной моделью текста (Slate на Twitch): изменения DOM в обход
+ * beforeinput они не видят, и в чат ушёл бы старый текст.
+ */
+function dispatchBeforeInput(target: HTMLElement, inputType: string, data: string | null): boolean {
+  const ev = new InputEvent('beforeinput', { inputType, data, bubbles: true, cancelable: true, composed: true });
+  target.dispatchEvent(ev);
+  return ev.defaultPrevented;
+}
+
+/**
+ * Стирает `deleteCount` символов перед кареткой и вставляет `text`.
+ * Сначала — через beforeinput (для Slate и подобных), если редактор не обработал — через execCommand
+ * (обычный contenteditable, Editor.js на VK Live).
+ */
+export function editBeforeCaret(input: HTMLElement, deleteCount: number, text: string): void {
+  if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) {
+    const end = input.selectionStart ?? input.value.length;
+    input.setRangeText(text, Math.max(0, end - deleteCount), input.selectionEnd ?? end, 'end');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  const active = document.activeElement;
+  const target = active instanceof HTMLElement && input.contains(active) ? active : input;
+  for (let i = 0; i < deleteCount; i++) {
+    if (!dispatchBeforeInput(target, 'deleteContentBackward', null)) document.execCommand('delete', false);
+  }
+  if (text && !dispatchBeforeInput(target, 'insertText', text)) document.execCommand('insertText', false, text);
+}
+
+/** Вставка кода смайла в поле ввода чата (из окна смайлов). */
+export async function insertIntoChat(adapter: ChatAdapter, code: string): Promise<boolean> {
   const input = adapter.getChatInput();
   if (!input) return false;
   input.focus();
@@ -20,14 +51,11 @@ export function insertIntoChat(adapter: ChatAdapter, code: string): boolean {
     sel.removeAllRanges();
     sel.addRange(r);
   }
+  // Редакторы (Slate) синхронизируют выделение по selectionchange с задержкой ~100 мс.
+  await new Promise((r) => setTimeout(r, 120));
   const before = textBeforeCaret(input);
-  const text = (before && !/\s$/.test(before) ? ' ' : '') + code + ' ';
-  if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) {
-    input.setRangeText(text, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length, 'end');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    return true;
-  }
-  return document.execCommand('insertText', false, text);
+  editBeforeCaret(input, 0, (before && !/\s$/.test(before) ? ' ' : '') + code + ' ');
+  return true;
 }
 
 function textBeforeCaret(input: HTMLElement): string {
@@ -106,6 +134,12 @@ export class EmotePicker {
     anchor.before(btn);
   }
 
+  /** Убрать кнопку и окно (при выключении скрипта). */
+  dispose(): void {
+    this.close();
+    document.getElementById(BTN_ID)?.remove();
+  }
+
   close(): void {
     this.host?.remove();
     this.host = this.root = null;
@@ -180,7 +214,9 @@ export class EmotePicker {
         img.loading = 'lazy';
         b.append(img);
         b.addEventListener('click', () => {
-          if (insertIntoChat(this.adapter, code)) void pushRecent(code);
+          void insertIntoChat(this.adapter, code).then((ok) => {
+            if (ok) void pushRecent(code);
+          });
           this.close();
         });
         grid.append(b);
@@ -207,12 +243,10 @@ export class EmotePicker {
  * Автодополнение кода смайла по Tab (повторный Tab — следующий вариант).
  * Срабатывает, только если есть подходящие смайлы; иначе Tab обрабатывает сама площадка.
  */
-export function installTabCompletion(adapter: ChatAdapter, getData: () => RenderData): void {
+export function installTabCompletion(adapter: ChatAdapter, getData: () => RenderData): () => void {
   let cycle: { options: string[]; i: number; inserted: string } | null = null;
 
-  document.addEventListener(
-    'keydown',
-    (e) => {
+  const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey) {
         if (e.key !== 'Shift') cycle = null;
         return;
@@ -243,19 +277,11 @@ export function installTabCompletion(adapter: ChatAdapter, getData: () => Render
 
       e.preventDefault();
       e.stopImmediatePropagation();
-      selectBackwards(input, replaceLen);
+      // Не выделяем слово (редактор площадки может не заметить выделение), а стираем его «Backspace'ами».
       const inserted = options[i]! + ' ';
-      document.execCommand('insertText', false, inserted);
+      editBeforeCaret(input, replaceLen, inserted);
       cycle = { options, i, inserted };
-    },
-    true,
-  );
-}
-
-/** Выделяет n символов перед кареткой (в пределах текстовых узлов). */
-function selectBackwards(input: HTMLElement, n: number): void {
-  const sel = window.getSelection();
-  if (!sel?.rangeCount) return;
-  for (let k = 0; k < n; k++) sel.modify('extend', 'backward', 'character');
-  if (!input.contains(sel.anchorNode)) sel.collapseToEnd();
+  };
+  document.addEventListener('keydown', onKey, true);
+  return () => document.removeEventListener('keydown', onKey, true);
 }

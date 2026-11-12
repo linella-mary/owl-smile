@@ -1,7 +1,8 @@
 import { jsonBytes, type Changes, type Snapshot } from '../git/repo';
 import {
   EMOTE_CODE_RE,
-  NICK_RE,
+  isValidNick,
+  normalizeNick,
   SLUG_RE,
   paths,
   userKey,
@@ -136,15 +137,17 @@ export function deletePaint(id: string): Mutation {
 }
 
 function writeUser(changes: Changes, key: string, u: UserCosmetics): void {
-  const [platform, nick] = key.split(':') as [Platform, string];
+  const i = key.indexOf(':');
+  const platform = key.slice(0, i) as Platform;
+  const nick = key.slice(i + 1);
   const empty = !u.badges.length && !u.paint;
   changes.set(paths.user(platform, nick), empty ? null : jsonBytes(u));
 }
 
 /** Назначает иконки и эффект нику. Пустое оформление удаляет файл пользователя. */
 export function setUser(platform: Platform, nick: string, cosmetics: UserCosmetics): Mutation {
-  const n = nick.trim().toLowerCase();
-  if (!NICK_RE.test(n)) throw new UserError('Некорректный ник');
+  const n = normalizeNick(nick);
+  if (!isValidNick(platform, n)) throw new UserError(platform === 'twitch' ? 'Логин Twitch: латиница, цифры и _' : 'Некорректный ник VK Live');
   if (cosmetics.badges.length > 3) throw new UserError('Не больше 3 иконок');
   return (snap) => {
     for (const b of cosmetics.badges) if (!snap.badges[b]) throw new UserError(`Иконка «${b}» не найдена`);

@@ -33,10 +33,18 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
 
   const picker = new EmotePicker(adapter, () => data);
   picker.ensureButton();
-  installTabCompletion(adapter, () => data);
+  const removeTab = installTabCompletion(adapter, () => data);
 
   const sel = adapter.messageSelector;
   const observer = new MutationObserver((mutations) => {
+    // Расширение перезагрузили/обновили — этот экземпляр скрипта «осиротел»: выключаемся,
+    // новый экземпляр ставит фоновый скрипт (см. background.ts).
+    if (!browser.runtime?.id) {
+      observer.disconnect();
+      removeTab();
+      picker.dispose();
+      return;
+    }
     picker.ensureButton();
     for (const m of mutations) {
       for (const n of m.addedNodes) {
