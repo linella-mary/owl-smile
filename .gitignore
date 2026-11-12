@@ -7,3 +7,6 @@ node_modules/
 !.env.example
 *.log
 .spike/
+
+# Исходное задание — только локально
+задание.md
