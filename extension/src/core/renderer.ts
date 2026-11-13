@@ -48,7 +48,11 @@ export class ChatRenderer {
     const { emotes } = this.data;
     if (!emotes.size) return;
     for (const node of this.adapter.getTextNodes(msg)) {
-      if (!node.parentNode || node.parentElement?.closest('a, .owl-badges')) continue;
+      if (!node.parentNode) continue;
+      // Ссылки и наши иконки пропускаем — но только внутри самого сообщения: если площадка обернула
+      // в <a> всё сообщение или цитату ответа («перейти к сообщению»), смайлы там всё равно нужны
+      const skip = node.parentElement?.closest('a, .owl-badges');
+      if (skip && msg.contains(skip)) continue;
       const tokens = tokenize(node.data, (c) => emotes.has(c));
       if (!tokens) continue;
       const frag = document.createDocumentFragment();

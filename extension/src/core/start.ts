@@ -27,6 +27,8 @@ export async function loadRenderData(): Promise<RenderData> {
 
 /** Запуск на странице площадки: первичный проход, слежение за чатом, обновление при синхронизации. */
 export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRenderer; data: () => RenderData }> {
+  // Стили под вёрстку площадки (style.css: .owl-vk …)
+  document.documentElement.classList.add(`owl-${adapter.platform}`);
   let data = await loadRenderData();
   const renderer = new ChatRenderer(adapter, data);
   renderer.processTree(document);

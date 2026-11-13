@@ -23,6 +23,37 @@ img.owl-badge {
   object-fit: contain;
 }
 
+/*
+ * VK Live: шрифт 13px при строке 16px — смайл с отрицательными отступами наезжал на соседние строки,
+ * а иконка стояла на 5–6 px выше ника (замерено на живом чате 13.11.2026). Здесь смайл крупнее и
+ * раздвигает свою строку, как на Twitch; иконки по центру ника, в ряд со значками VK.
+ * Класс owl-vk ставит startOwl на <html>.
+ */
+.owl-vk img.owl-emote {
+  height: 32px;
+  margin: 0 1px;
+  vertical-align: middle;
+}
+/* Цитата в ответе — однострочная, с многоточием: смайл в высоту строки, чтобы не обрезался */
+.owl-vk [data-role="messageParentMessage"] img.owl-emote {
+  height: 16px;
+  margin: -2px 1px 0;
+  vertical-align: top;
+}
+.owl-vk [data-role="messageAuthor"]:has(> .owl-badges) {
+  align-items: center;
+  vertical-align: middle;
+}
+.owl-vk .owl-badges {
+  gap: 3px;
+  margin-right: 4px;
+}
+.owl-vk img.owl-badge {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
 /* Эффекты ников: пресеты + CSS-переменные (ставятся из applyPaint) */
 .owl-paint--solid {
   color: var(--owl-c1) !important;

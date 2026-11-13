@@ -38,18 +38,50 @@ export function editBeforeCaret(input: HTMLElement, deleteCount: number, text: s
   if (text && !dispatchBeforeInput(target, 'insertText', text)) document.execCommand('insertText', false, text);
 }
 
-/** Вставка кода смайла в поле ввода чата (из окна смайлов). */
+/**
+ * Последний текстовый узел поля ввода, который можно редактировать: не внутри чипа упоминания или
+ * цитаты ответа (contenteditable="false"). Slate (Twitch) понимает каретку только внутри своих
+ * текстовых узлов — точку «в конце корня редактора» он сопоставить не может, и вставка ломается.
+ */
+export function lastEditableText(input: HTMLElement): Text | null {
+  const walker = document.createTreeWalker(input, NodeFilter.SHOW_TEXT);
+  let last: Text | null = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const locked = n.parentElement?.closest('[contenteditable="false"]');
+    if (locked && input.contains(locked)) continue;
+    last = n as Text;
+  }
+  return last;
+}
+
+/** Каретка — в конец сообщения (в конец последнего редактируемого текста). */
+export function caretToEnd(input: HTMLElement): void {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const r = document.createRange();
+  const text = lastEditableText(input);
+  if (text) r.setStart(text, text.data.length);
+  else {
+    r.selectNodeContents(input);
+    r.collapse(false);
+  }
+  r.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+/**
+ * Вставка кода смайла из окна смайлов — всегда в конец сообщения. В режиме ответа в поле ввода есть
+ * чип с ником или цитата, и каретка могла оказаться в них или за пределами текста — код портил ответ.
+ */
 export async function insertIntoChat(adapter: ChatAdapter, code: string): Promise<boolean> {
   const input = adapter.getChatInput();
   if (!input) return false;
   input.focus();
-  const sel = window.getSelection();
-  if (sel && (!sel.rangeCount || !input.contains(sel.anchorNode))) {
-    const r = document.createRange();
-    r.selectNodeContents(input);
-    r.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(r);
+  if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) {
+    input.setSelectionRange(input.value.length, input.value.length);
+  } else {
+    caretToEnd(input);
   }
   // Редакторы (Slate) синхронизируют выделение по selectionchange с задержкой ~100 мс.
   await new Promise((r) => setTimeout(r, 120));
@@ -244,7 +276,7 @@ export class EmotePicker {
  * Срабатывает, только если есть подходящие смайлы; иначе Tab обрабатывает сама площадка.
  */
 export function installTabCompletion(adapter: ChatAdapter, getData: () => RenderData): () => void {
-  let cycle: { options: string[]; i: number; inserted: string } | null = null;
+  let cycle: { options: string[]; i: number; inserted: string; lead: boolean } | null = null;
 
   const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey) {
@@ -254,16 +286,21 @@ export function installTabCompletion(adapter: ChatAdapter, getData: () => Render
       const input = adapter.getChatInput();
       if (!input || !input.contains(e.target as Node)) return;
       const before = textBeforeCaret(input);
-      const word = /(\S+)$/.exec(before)?.[1] ?? '';
+      // Код смайла — только латиница, цифры и «_». Так «@ник,Cat» в ответе дополняется по «Cat»
+      const word = /([A-Za-z0-9_]+)$/.exec(before)?.[1] ?? '';
+      // Слово приклеено к нику или знаку — перед кодом нужен пробел, иначе смайл не распознается
+      const glued = before.length > word.length && !/\s/.test(before[before.length - word.length - 1]!);
 
       let options: string[];
       let i: number;
       let replaceLen: number;
+      let lead = glued;
       if (cycle && before.endsWith(cycle.inserted)) {
         // Повторный Tab сразу после вставки — следующий вариант вместо предыдущего.
         options = cycle.options;
         i = (cycle.i + 1) % options.length;
         replaceLen = cycle.inserted.length;
+        lead = cycle.lead;
       } else {
         if (word.length < 2) return;
         const p = word.toLowerCase();
@@ -278,9 +315,9 @@ export function installTabCompletion(adapter: ChatAdapter, getData: () => Render
       e.preventDefault();
       e.stopImmediatePropagation();
       // Не выделяем слово (редактор площадки может не заметить выделение), а стираем его «Backspace'ами».
-      const inserted = options[i]! + ' ';
+      const inserted = `${lead ? ' ' : ''}${options[i]!} `;
       editBeforeCaret(input, replaceLen, inserted);
-      cycle = { options, i, inserted };
+      cycle = { options, i, inserted, lead };
   };
   document.addEventListener('keydown', onKey, true);
   return () => document.removeEventListener('keydown', onKey, true);
