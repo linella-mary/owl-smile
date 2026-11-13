@@ -60,11 +60,11 @@
 
 1. **`Function(...)` в сборке.** В `background.js` и `manage-*.js` есть два вызова конструктора `Function`:
    - проверка `Function('')` из zod — в MV3 она молча ловит ошибку CSP;
-   - `Function('binder', …)` из полифила `function-bind`, который тянет одна из зависимостей.
+   - `Function('binder', …)` из полифила `function-bind`. Его тянет `isomorphic-git` (цепочка `isomorphic-git → sha.js → to-buffer → typed-array-buffer → call-bound → function-bind`, проверено `npm ls function-bind`).
 
    Вреда нет, но проверяющие на такое реагируют. Что сделать:
    - у zod включить `z.config({ jitless: true })`;
-   - найти, кто тянет `function-bind` (`npm ls function-bind`), и заменить зависимость или подставить нативный `Function.prototype.bind` через alias в `wxt.config.ts`.
+   - `isomorphic-git` заменить нельзя (на нём синхронизация), поэтому подставить вместо `function-bind` нативный `Function.prototype.bind` через alias в `wxt.config.ts`.
 2. **Иконка 128** — добавить прозрачные поля (см. выше).
 3. **`homepage_url`** в манифесте — ссылка на страницу проекта на GitFlic.
 4. **Политика конфиденциальности** — страница и ссылка на неё (см. выше).

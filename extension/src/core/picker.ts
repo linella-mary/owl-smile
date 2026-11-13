@@ -38,41 +38,47 @@ export function editBeforeCaret(input: HTMLElement, deleteCount: number, text: s
   if (text && !dispatchBeforeInput(target, 'insertText', text)) document.execCommand('insertText', false, text);
 }
 
+/** Нередактируемая вставка в поле ввода: чип упоминания в ответе, смайл площадки. */
+const isChip = (n: Node | null): boolean => n instanceof Element && n.getAttribute('contenteditable') === 'false';
+
 /**
- * Последний текстовый узел поля ввода, который можно редактировать: не внутри чипа упоминания или
- * цитаты ответа (contenteditable="false"). Slate (Twitch) понимает каретку только внутри своих
- * текстовых узлов — точку «в конце корня редактора» он сопоставить не может, и вставка ломается.
+ * Точка «конец сообщения» в поле ввода — [узел, смещение]. Спускаемся по последним потомкам:
+ * текст — в его конец; пустая строка (<br>) — перед <br>; чип — сразу после него (а не перед ним:
+ * иначе код смайла встал бы между текстом и ником).
  */
-export function lastEditableText(input: HTMLElement): Text | null {
-  const walker = document.createTreeWalker(input, NodeFilter.SHOW_TEXT);
-  let last: Text | null = null;
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    const locked = n.parentElement?.closest('[contenteditable="false"]');
-    if (locked && input.contains(locked)) continue;
-    last = n as Text;
+export function endPoint(input: HTMLElement): [Node, number] {
+  let node: Node = input;
+  for (;;) {
+    let last = node.lastChild;
+    while (last && !(last instanceof Element) && !(last instanceof Text)) last = last.previousSibling; // комментарии
+    if (!last) return [node, 0];
+    const index = Array.prototype.indexOf.call(node.childNodes, last) as number;
+    if (isChip(last)) return [node, index + 1];
+    if (last instanceof Text) return [last, last.data.length];
+    if (last.nodeName === 'BR') {
+      const prev = last.previousSibling;
+      return prev instanceof Text ? [prev, prev.data.length] : [node, index];
+    }
+    node = last;
   }
-  return last;
 }
 
-/** Каретка — в конец сообщения (в конец последнего редактируемого текста). */
+/** Каретка — в конец сообщения. */
 export function caretToEnd(input: HTMLElement): void {
   const sel = window.getSelection();
   if (!sel) return;
+  const [node, offset] = endPoint(input);
   const r = document.createRange();
-  const text = lastEditableText(input);
-  if (text) r.setStart(text, text.data.length);
-  else {
-    r.selectNodeContents(input);
-    r.collapse(false);
-  }
+  r.setStart(node, offset);
   r.collapse(true);
   sel.removeAllRanges();
   sel.addRange(r);
 }
 
 /**
- * Вставка кода смайла из окна смайлов — всегда в конец сообщения. В режиме ответа в поле ввода есть
- * чип с ником или цитата, и каретка могла оказаться в них или за пределами текста — код портил ответ.
+ * Вставка кода смайла из окна смайлов — всегда в конец сообщения. Раньше код вставлялся туда, где
+ * стояла каретка, а после клика по окну смайлов она оказывается в начале поля: код вставал перед
+ * текстом и перед ником в ответе.
  */
 export async function insertIntoChat(adapter: ChatAdapter, code: string): Promise<boolean> {
   const input = adapter.getChatInput();
@@ -100,6 +106,35 @@ function textBeforeCaret(input: HTMLElement): string {
   r.setEnd(sel.anchorNode!, sel.anchorOffset);
   // contenteditable хранит пробел в конце как неразрывный.
   return r.toString().replace(/ /g, ' ');
+}
+
+/**
+ * Набранный текст перед кареткой для автодополнения: только после последнего чипа (упоминание в ответе,
+ * смайл площадки). chip — такой чип перед кареткой есть.
+ */
+export function typedBeforeCaret(input: HTMLElement): { before: string; chip: boolean } {
+  if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) return { before: textBeforeCaret(input), chip: false };
+  const sel = window.getSelection();
+  if (!sel?.rangeCount || !sel.anchorNode || !input.contains(sel.anchorNode)) return { before: textBeforeCaret(input), chip: false };
+  const r = document.createRange();
+  r.selectNodeContents(input);
+  r.setEnd(sel.anchorNode, sel.anchorOffset);
+  const chips = input.querySelectorAll('[contenteditable="false"]');
+  for (let i = chips.length - 1; i >= 0; i--) {
+    const chip = chips[i]!;
+    const parent = chip.parentNode;
+    if (!parent) continue;
+    // Чип внутри другого чипа — считаем по внешнему
+    const outer = chip.parentElement?.closest('[contenteditable="false"]');
+    if (outer && input.contains(outer)) continue;
+    const after = (Array.prototype.indexOf.call(parent.childNodes, chip) as number) + 1;
+    if (r.comparePoint(parent, after) > 0) continue; // чип после каретки
+    const tail = document.createRange();
+    tail.setStart(parent, after);
+    tail.setEnd(sel.anchorNode, sel.anchorOffset);
+    return { before: tail.toString().replace(/\u00a0/g, ' '), chip: true };
+  }
+  return { before: r.toString().replace(/\u00a0/g, ' '), chip: false };
 }
 
 async function getRecent(): Promise<string[]> {
@@ -289,11 +324,12 @@ export function installTabCompletion(adapter: ChatAdapter, getData: () => Render
       }
       const input = adapter.getChatInput();
       if (!input || !input.contains(e.target as Node)) return;
-      const before = textBeforeCaret(input);
-      // Код смайла — только латиница, цифры и «_». Так «@ник,Cat» в ответе дополняется по «Cat»
-      const word = /([A-Za-z0-9_]+)$/.exec(before)?.[1] ?? '';
-      // Слово приклеено к нику или знаку — перед кодом нужен пробел, иначе смайл не распознается
-      const glued = before.length > word.length && !/\s/.test(before[before.length - word.length - 1]!);
+      // Слово — как и раньше, всё до пробела: «@ник» и «:смайл» дополняет сама площадка, их не трогаем.
+      // Но текст считаем от последнего чипа: в ответе слово может стоять вплотную к чипу с ником.
+      const { before, chip } = typedBeforeCaret(input);
+      const word = /(\S+)$/.exec(before)?.[1] ?? '';
+      // Слово вплотную к чипу — перед кодом нужен пробел, иначе смайл не распознается
+      const glued = chip && word.length > 0 && word.length === before.length;
 
       let options: string[];
       let i: number;

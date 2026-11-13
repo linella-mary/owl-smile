@@ -233,6 +233,44 @@ async function main() {
     await vk.keyboard.press('Tab');
     check('VK: Tab-автодополнение', (await vkText()) === 'CatJam CatJam ', JSON.stringify(await vkText()));
 
+    // 4a. Режим ответа: в поле ввода чип с ником (нередактируемый) и текст; после клика по окну смайлов
+    //     каретка оказывается в начале поля — код всё равно должен встать в конец сообщения
+    const setReply = (html: string, caret: 'start' | 'end') =>
+      vk.evaluate(
+        ({ html, caret }) => {
+          const p = document.querySelector('.ce-paragraph') as HTMLElement;
+          p.innerHTML = html;
+          p.focus();
+          const r = document.createRange();
+          r.selectNodeContents(p);
+          r.collapse(caret === 'start');
+          const sel = getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(r);
+        },
+        { html, caret },
+      );
+    const CHIP = '<span class="mention" contenteditable="false">@Леся</span>';
+    await setReply(`${CHIP}&nbsp;привет`, 'start');
+    await vk.click('#owl-picker-btn');
+    await vk.locator('button[title="CatJam"]').first().click();
+    check('VK, ответ: смайл из окна — в конец, ник на месте', Boolean(await waitFor(async () => ((await vkText()) === '@Леся привет CatJam ' ? 'ok' : null), 3000)), JSON.stringify(await vkText()));
+    check('VK, ответ: чип с ником цел', (await vk.locator('.ce-paragraph .mention').count()) === 1);
+
+    await setReply(`привет ${CHIP}`, 'start');
+    await vk.click('#owl-picker-btn');
+    await vk.locator('button[title="CatJam"]').first().click();
+    check('VK, ответ: сообщение кончается ником — смайл после ника', Boolean(await waitFor(async () => ((await vkText()) === 'привет @Леся CatJam ' ? 'ok' : null), 3000)), JSON.stringify(await vkText()));
+
+    await setReply(`${CHIP}Ca`, 'end');
+    await vk.keyboard.press('Tab');
+    check('VK, ответ: Tab дополняет слово вплотную к нику', (await vkText()) === '@Леся CatJam ', JSON.stringify(await vkText()));
+
+    await setReply('@ca', 'end');
+    await vk.keyboard.press('Tab');
+    check('VK: Tab после «@» оставлен площадке (ник не подменяется смайлом)', !(await vkText()).includes('CatJam'), JSON.stringify(await vkText()));
+    await setReply('', 'end');
+
     // 5. Загрузка смайла через страницу manage
     const manage = await ctx.newPage();
     await manage.goto(`chrome-extension://${extId}/manage.html`);

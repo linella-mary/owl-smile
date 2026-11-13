@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { caretToEnd, lastEditableText } from '../src/core/picker';
+import { caretToEnd, endPoint, typedBeforeCaret } from '../src/core/picker';
 import { ChatRenderer, emptyData, type RenderData } from '../src/core/renderer';
 import { vkliveAdapter } from '../src/platforms/vklive';
 
@@ -54,24 +54,97 @@ describe('VK Live: ответ на сообщение', () => {
   });
 });
 
-describe('Вставка из окна смайлов в режиме ответа', () => {
-  it('каретка уходит в конец последнего редактируемого текста, мимо чипа с ником', () => {
-    document.body.innerHTML = `
-      <div id="ed" contenteditable="true"><p><span contenteditable="false" class="mention">@Леся</span><span>привет</span></p><p><span contenteditable="false">цитата</span></p></div>`;
-    const ed = document.getElementById('ed')!;
-    const last = lastEditableText(ed)!;
-    expect(last.data).toBe('привет');
-    caretToEnd(ed);
+/** Каретка в конец текстового узла с данным текстом. */
+function caretAfter(root: HTMLElement, text: string): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if ((n as Text).data !== text) continue;
+    const r = document.createRange();
+    r.setStart(n, text.length);
+    r.collapse(true);
     const sel = window.getSelection()!;
-    expect(sel.anchorNode).toBe(last);
-    expect(sel.anchorOffset).toBe('привет'.length);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return;
+  }
+  throw new Error('нет текста: ' + text);
+}
+
+describe('Вставка из окна смайлов: каретка в конец сообщения', () => {
+  const editor = (html: string) => {
+    document.body.innerHTML = `<div id="ed" contenteditable="true">${html}</div>`;
+    return document.getElementById('ed')!;
+  };
+
+  it('обычный текст — в конец текста', () => {
+    const ed = editor('<p>привет</p>');
+    const [node, offset] = endPoint(ed);
+    expect((node as Text).data).toBe('привет');
+    expect(offset).toBe(6);
   });
 
-  it('пустое поле: каретка в конце поля', () => {
-    document.body.innerHTML = `<div id="ed" contenteditable="true"><span contenteditable="false">@Леся</span></div>`;
-    const ed = document.getElementById('ed')!;
-    expect(lastEditableText(ed)).toBeNull();
+  it('ответ: чип с ником, потом текст — в конец текста', () => {
+    const ed = editor('<p><span contenteditable="false">@Леся</span> привет</p>');
     caretToEnd(ed);
-    expect(window.getSelection()!.anchorNode).toBe(ed);
+    const sel = window.getSelection()!;
+    expect((sel.anchorNode as Text).data).toBe(' привет');
+    expect(sel.anchorOffset).toBe(7);
+  });
+
+  it('сообщение заканчивается чипом — сразу после чипа, а не перед ним', () => {
+    const ed = editor('<p>привет <span contenteditable="false">@Леся</span></p>');
+    const [node, offset] = endPoint(ed);
+    expect(node).toBe(ed.querySelector('p'));
+    expect(offset).toBe(2);
+  });
+
+  it('пустая строка редактора (<br>) — внутри строки, перед <br>', () => {
+    const ed = editor('<p><br></p>');
+    const [node, offset] = endPoint(ed);
+    expect(node).toBe(ed.querySelector('p'));
+    expect(offset).toBe(0);
+  });
+
+  it('пустой редактор Slate (Twitch): подсказка-чип и невидимый символ', () => {
+    const ed = editor('<div><span><span contenteditable="false">Send a message</span><span data-slate-zero-width="n">﻿<br></span></span></div>');
+    const [node, offset] = endPoint(ed);
+    expect((node as Text).data).toBe('﻿');
+    expect(offset).toBe(1);
+  });
+
+  it('совсем пустое поле', () => {
+    const ed = editor('');
+    expect(endPoint(ed)).toEqual([ed, 0]);
+  });
+});
+
+describe('Tab-автодополнение: набранный текст считается от чипа', () => {
+  const editor = (html: string) => {
+    document.body.innerHTML = `<div id="ed" contenteditable="true">${html}</div>`;
+    return document.getElementById('ed')!;
+  };
+
+  it('без чипов — весь текст до каретки (как раньше)', () => {
+    const ed = editor('<p>hi @ow</p>');
+    caretAfter(ed, 'hi @ow');
+    expect(typedBeforeCaret(ed)).toEqual({ before: 'hi @ow', chip: false });
+  });
+
+  it('слово вплотную к чипу с ником — только слово', () => {
+    const ed = editor('<p><span contenteditable="false">@Леся</span>Cat</p>');
+    caretAfter(ed, 'Cat');
+    expect(typedBeforeCaret(ed)).toEqual({ before: 'Cat', chip: true });
+  });
+
+  it('чип после каретки не считается', () => {
+    const ed = editor('<p>Cat<span contenteditable="false">@Леся</span></p>');
+    caretAfter(ed, 'Cat');
+    expect(typedBeforeCaret(ed)).toEqual({ before: 'Cat', chip: false });
+  });
+
+  it('неразрывный пробел после чипа — обычный пробел', () => {
+    const ed = editor('<p><span contenteditable="false">@Леся</span> Cat</p>');
+    caretAfter(ed, ' Cat');
+    expect(typedBeforeCaret(ed)).toEqual({ before: ' Cat', chip: true });
   });
 });
