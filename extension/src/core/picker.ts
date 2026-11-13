@@ -151,9 +151,13 @@ export class EmotePicker {
     btn.title = 'Смайлы Owl Smile';
     btn.setAttribute('aria-label', 'Смайлы Owl Smile');
     btn.textContent = '🦉';
+    // Центр по вертикали — флексом и align-self, а не line-height: в строке кнопок VK Live сова
+    // с line-height 30px стояла выше их значков
     Object.assign(btn.style, {
-      background: 'none', border: '0', cursor: 'pointer', fontSize: '18px', padding: '0 6px',
-      height: '30px', borderRadius: '4px', lineHeight: '30px',
+      background: 'none', border: '0', cursor: 'pointer', fontSize: '18px', padding: '0 6px', margin: '0',
+      height: '30px', minWidth: '30px', borderRadius: '4px', lineHeight: '1',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
+      verticalAlign: 'middle', flexShrink: '0',
     } satisfies Partial<CSSStyleDeclaration>);
     btn.addEventListener('mouseenter', () => (btn.style.background = '#ffffff1f'));
     btn.addEventListener('mouseleave', () => (btn.style.background = 'none'));
