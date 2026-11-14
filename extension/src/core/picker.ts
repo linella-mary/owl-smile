@@ -152,6 +152,31 @@ async function pushRecent(tab: Tab, code: string): Promise<void> {
   await browser.storage.local.set({ [recentKey(tab)]: list });
 }
 
+const STOP_EVENTS = [
+  'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'touchstart', 'touchend',
+  'keydown', 'keyup', 'keypress', 'beforeinput', 'input', 'focusin', 'focusout', 'wheel',
+] as const;
+
+/**
+ * Предок с transform, filter и т. п. делает position: fixed относительным к себе — окно смайлов
+ * внутри такого контейнера встанет не туда. Тогда окно вставляется в body.
+ */
+export function trapsFixed(el: Element): boolean {
+  for (let n: Element | null = el; n && n !== document.documentElement; n = n.parentElement) {
+    const s = getComputedStyle(n);
+    if (
+      (s.transform && s.transform !== 'none') ||
+      (s.filter && s.filter !== 'none') ||
+      (s.perspective && s.perspective !== 'none') ||
+      /paint|layout|strict|content/.test(s.contain ?? '') ||
+      /transform|filter|perspective/.test(s.willChange ?? '') ||
+      (s.backdropFilter && s.backdropFilter !== 'none')
+    )
+      return true;
+  }
+  return false;
+}
+
 const PANEL_CSS = `
 :host { all: initial; }
 .panel {
@@ -250,6 +275,11 @@ export class EmotePicker {
     let tab: Tab = saved === 'bttv' ? 'bttv' : 'owl';
     const recent: Record<Tab, string[]> = { owl: await getRecent('owl'), bttv: await getRecent('bttv') };
     this.host = document.createElement('div');
+    this.host.className = 'owl-picker-host';
+    // События окна до площадки не доходят: её обработчики «клик мимо», горячие клавиши, Enter и Esc
+    // в поле ввода не должны срабатывать от кликов и набора в окне смайлов. Наши собственные
+    // обработчики (кнопки окна, закрытие по клику мимо и Esc) срабатывают раньше.
+    for (const type of STOP_EVENTS) this.host.addEventListener(type, (e) => e.stopPropagation());
     this.root = this.host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = PANEL_CSS;
@@ -259,7 +289,8 @@ export class EmotePicker {
       `<div class="tabs" role="tablist"><button role="tab" data-tab="owl">🦉 Owl Smile</button><button role="tab" data-tab="bttv">BetterTTV</button></div>` +
       `<div class="head"><input type="search" placeholder="Поиск смайла"><button class="add" title="Загрузить свой смайл">+</button></div><div class="body"></div>`;
     this.root.append(style, panel);
-    document.body.append(this.host);
+    const container = this.adapter.getPickerContainer?.();
+    (container && !trapsFixed(container) ? container : document.body).append(this.host);
 
     // Открываем над кнопкой (как обычно у поля чата), а если сверху тесно — под ней.
     const r = btn.getBoundingClientRect();

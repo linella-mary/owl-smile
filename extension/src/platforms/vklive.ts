@@ -42,6 +42,13 @@ export const vkliveAdapter: ChatAdapter = {
     );
   },
 
+  // Окно смайлов — внутри блока ввода: клик по окну вне его VK в режиме ответа принимал за «клик мимо»
+  // и сбрасывал ответ вместе с набранным текстом (жалоба 14.11.2026). Блок ввода — position: relative,
+  // z-index 10, без transform: окно с position: fixed внутри него видно поверх чата (проверено на живом VK).
+  getPickerContainer() {
+    return document.getElementById('chat-pub-root') ?? document.querySelector('[class*="ChatPublisher_root_"]');
+  },
+
   getPickerAnchor() {
     return (
       document.querySelector('[class*="Publisher_smileContainer_"]') ??

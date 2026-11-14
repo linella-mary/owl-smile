@@ -66,10 +66,23 @@ const VK_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><bod
 <div class="Chat_root_tUBSs"><div class="ChatBoxBase_root_k1P9S" id="chat">
   <div class="ChatMessage_root_UHMEJ MessagesList_message_mHGaj undefined" data-test-id="ChatMessage:root" data-role="messageContainer" data-message-id="1"><div class="ChatMessage_message_r1jzC"><div class="ChatMessage_publishTime_EzWt_">22:13</div><div data-role="messageMainContent"><div class="ChatMessageAuthorPanel_author_qc2nK" data-role="messageAuthor" data-test-id="ChatMessage:author"><div class="ChatBadge_root_IHNlp" title="Модератор"><div class="Badge_small_BOk2J"><img alt="Модератор" class="ChatBadge_image_FMyoR" height="16" width="16" src="data:,"></div></div> <span class="ChatMessageAuthorPanel_name_w3ZOm" style="color: rgb(184, 170, 255);">Данил Кузнецов.:</span></div><span class="BlockRenderer_markup_Wtipg BlockRenderer_noIndent_yWqyP" data-role="markup">всем привет CatJam</span></div></div></div>
 </div></div>
-<div class="ChatPublisher_root_xCqwT"><div class="Publisher_root_OEAeu">
+<div class="ChatPublisher_root_xCqwT" id="chat-pub-root"><div class="Publisher_root_OEAeu">
   <div class="Publisher_editorWrapper_ruJa3"><div class="Publisher_editor_lrEMS"><div class="codex-editor"><div class="ce-block"><div class="ce-paragraph cdx-block" contenteditable="true" style="min-height:20px;border:1px solid #555"></div></div></div></div></div>
   <div class="Publisher_actionsContainer_nXHDH"><div class="Publisher_smileContainer_MjJHi"><button>☺</button></div></div>
 </div></div>
+<script>
+  // Как VK в режиме ответа: нажатие мыши вне блока ввода отменяет ответ и стирает набранный текст
+  // (жалоба 14.11.2026: окно смайлов совы было вне блока, и выбор смайла сбрасывал ответ).
+  // Слушаем в фазе перехвата — так остановка всплытия не помогла бы, нужен именно «клик внутри».
+  (() => {
+    const root = document.getElementById('chat-pub-root');
+    document.addEventListener('mousedown', (e) => {
+      if (!window.__vkReply || root.contains(e.target)) return;
+      window.__vkReply = false;
+      document.querySelector('.ce-paragraph').innerHTML = '';
+    }, true);
+  })();
+</script>
 </body></html>`;
 
 /** Анимированный GIF: двигающийся круг на прозрачном фоне. */
@@ -291,6 +304,7 @@ async function main() {
     const setReply = (html: string, caret: 'start' | 'end') =>
       vk.evaluate(
         ({ html, caret }) => {
+          (window as unknown as { __vkReply: boolean }).__vkReply = html.length > 0; // режим ответа включён
           const p = document.querySelector('.ce-paragraph') as HTMLElement;
           p.innerHTML = html;
           p.focus();
@@ -309,6 +323,12 @@ async function main() {
     await vk.locator('button[title="CatJam"]').first().click();
     check('VK, ответ: смайл из окна — в конец, ник на месте', Boolean(await waitFor(async () => ((await vkText()) === '@Леся привет CatJam ' ? 'ok' : null), 3000)), JSON.stringify(await vkText()));
     check('VK, ответ: чип с ником цел', (await vk.locator('.ce-paragraph .mention').count()) === 1);
+    check('VK, ответ: выбор смайла в окне не отменил ответ', await vk.evaluate(() => (window as unknown as { __vkReply: boolean }).__vkReply === true));
+    await vk.click('#owl-picker-btn');
+    check('VK: окно смайлов — внутри блока ввода', await vk.evaluate(() => document.querySelector('.owl-picker-host')?.parentElement?.id === 'chat-pub-root'));
+    await vk.locator('.panel input').fill('Cat');
+    await vk.locator('.panel input').press('Escape');
+    check('VK, ответ: поиск и Esc в окне не трогают ответ', await vk.evaluate(() => (window as unknown as { __vkReply: boolean }).__vkReply === true) && (await vkText()).startsWith('@Леся привет'), JSON.stringify(await vkText()));
 
     await setReply(`привет ${CHIP}`, 'start');
     await vk.click('#owl-picker-btn');
