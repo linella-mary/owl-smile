@@ -2,6 +2,7 @@ import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { createBttvSync } from '../shared/bttv';
 import type { OwlMessage } from '../shared/messages';
+import { loadSettings, onSettingsChanged, saveSettings, type Settings } from '../shared/settings';
 import { sync } from '../sync';
 
 const bttv = createBttvSync({
@@ -15,6 +16,12 @@ const bttv = createBttvSync({
 
 const ALARM = 'owl-sync';
 const PERIOD_MIN = 15;
+
+/** Значок расширения: «off», когда Owl Smile выключен в чате. */
+function showEnabled(s: Settings): void {
+  void browser.action.setBadgeText({ text: s.enabled ? '' : 'off' });
+  void browser.action.setBadgeBackgroundColor({ color: '#53535f' });
+}
 
 /** Ставит content scripts из манифеста во все открытые подходящие вкладки. */
 async function injectIntoOpenTabs(): Promise<void> {
@@ -46,6 +53,13 @@ export default defineBackground(() => {
     // После установки/обновления в уже открытых вкладках нашего скрипта нет (или он «осиротел») —
     // ставим сами, чтобы не нужно было обновлять страницу.
     if (reason === 'install' || reason === 'update') void injectIntoOpenTabs();
+  });
+
+  // Главный выключатель: горячая клавиша (Alt+Shift+O по умолчанию) и значок на панели
+  void loadSettings().then(showEnabled);
+  onSettingsChanged(showEnabled);
+  browser.commands.onCommand.addListener((command) => {
+    if (command === 'toggle-owl') void loadSettings().then((s) => saveSettings({ enabled: !s.enabled }));
   });
 
   // Периодическая синхронизация (будильник может пропасть после перезапуска — пересоздаём).

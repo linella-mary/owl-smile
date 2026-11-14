@@ -4,6 +4,7 @@ import { browser } from 'wxt/browser';
 import { K_BTTV_GLOBAL, K_BTTV_SETTING, bttvChannelKey, type BttvChannel, type BttvGlobal } from '../../shared/bttv';
 import { K_INDEX, K_STATUS, getIndex, getStatus, type LocalIndex, type SyncStatus } from '../../shared/cache';
 import { requestSync, type OwlMessage } from '../../shared/messages';
+import { loadSettings, onSettingsChanged, saveSettings } from '../../shared/settings';
 
 function timeAgo(ts: number): string {
   const s = Math.round((Date.now() - ts) / 1000);
@@ -87,6 +88,29 @@ function Bttv() {
   );
 }
 
+/** Главный выключатель: всё, что Owl Smile делает в чате. */
+function Enabled() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    void loadSettings().then((s) => setEnabled(s.enabled));
+    return onSettingsChanged((s) => setEnabled(s.enabled));
+  }, []);
+  if (enabled === null) return null;
+  return (
+    <label class={`master-toggle ${enabled ? '' : 'off'}`}>
+      <input type="checkbox" checked={enabled} onChange={(e) => {
+        const v = e.currentTarget.checked;
+        setEnabled(v);
+        void saveSettings({ enabled: v });
+      }} />
+      <span class="grow">
+        <b>{enabled ? 'Owl Smile в чате включён' : 'Owl Smile в чате выключен'}</b>
+        <span class="muted"> · Alt+Shift+O</span>
+      </span>
+    </label>
+  );
+}
+
 function Popup() {
   const [index, setIndex] = useState<LocalIndex | null>(null);
   const [status, setStatus] = useState<SyncStatus | null>(null);
@@ -110,6 +134,7 @@ function Popup() {
   return (
     <div class="stack">
       <h1>🦉 Owl Smile</h1>
+      <Enabled />
       <div>
         Смайлов: <b>{count(index?.emotes)}</b> · иконок: <b>{count(index?.badges)}</b> · эффектов: <b>{count(index?.paints)}</b>
       </div>
@@ -125,6 +150,9 @@ function Popup() {
         </button>
         <button class="ghost" onClick={() => void browser.tabs.create({ url: browser.runtime.getURL('/manage.html') })}>
           Загрузить…
+        </button>
+        <button class="ghost" onClick={() => void browser.runtime.openOptionsPage()}>
+          Настройки…
         </button>
       </div>
       <Bttv />

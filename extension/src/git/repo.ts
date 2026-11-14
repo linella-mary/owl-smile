@@ -2,18 +2,25 @@ import git, { Errors, type HttpClient, type TreeEntry } from 'isomorphic-git';
 import type { ZodType } from 'zod';
 import { repoUrl, type RepoConfig } from '../shared/config';
 import {
+  BadgeInfoSchema,
   BadgeSchema,
+  SLUG_RE,
   EmoteSchema,
   MetaSchema,
+  NameplateSchema,
   PaintSchema,
+  ProfileSchema,
   PLATFORMS,
   UserSchema,
   isValidNick,
   normalizeNick,
   userKey,
   type Badge,
+  type BadgeInfo,
   type Emote,
+  type Nameplate,
   type Paint,
+  type Profile,
   type UserCosmetics,
 } from '../shared/schema';
 
@@ -25,9 +32,14 @@ export interface Snapshot {
   head: string;
   emotes: Record<string, Emote>;
   badges: Record<string, Badge>;
+  /** Описания иконок (badges-info/). */
+  badgeInfo: Record<string, BadgeInfo>;
   paints: Record<string, Paint>;
   /** Ключ — "twitch:login" / "vk:nick". */
   users: Record<string, UserCosmetics>;
+  nameplates: Record<string, Nameplate>;
+  /** Ключ — "twitch:login" / "vk:nick". Незнакомые поля из будущих версий сохраняются как есть. */
+  profiles: Record<string, Profile>;
   /** Путь картинки ("img/....webp") → oid git-блоба. */
   images: Record<string, string>;
   /** Файлы, не прошедшие проверку (пропущены). */
@@ -40,6 +52,20 @@ export type Changes = Map<string, Uint8Array | null>;
 export class ConflictError extends Error {}
 
 const MAX_PUSH_ATTEMPTS = 3;
+/** Пересобрать локальную копию, если pack-файлов больше (чтение объектов перебирает их все). */
+const MAX_PACKS = 40;
+/** Запас роста локальной копии сверх удвоенного размера свежей (см. compactIfBloated). */
+const COMPACT_SLACK_BYTES = 2 * 1024 * 1024;
+
+/** То, что нужно от fs для учёта места и пересборки копии (есть у LightningFS и node:fs). */
+interface PromiseFs {
+  readdir(p: string): Promise<string[]>;
+  stat(p: string): Promise<{ isDirectory(): boolean; size: number }>;
+  unlink(p: string): Promise<void>;
+  rmdir(p: string): Promise<void>;
+  readFile(p: string, enc: 'utf8'): Promise<string>;
+  writeFile(p: string, data: string, enc: 'utf8'): Promise<void>;
+}
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -98,20 +124,103 @@ export class DataRepo {
     await git.addRemote({ ...this.base, remote: 'origin', url: this.url, force: true });
   }
 
-  /** Скачивает последний коммит ветки (неглубоко). Возвращает его oid. */
+  /** Промисный интерфейс fs: у LightningFS и node:fs он в .promises. */
+  private get pfs(): PromiseFs {
+    const f = this.fs as unknown as { promises?: PromiseFs };
+    return f.promises ?? (this.fs as unknown as PromiseFs);
+  }
+
+  /** Сколько места занимают объекты локальной копии и сколько в ней pack-файлов. */
+  async storageUsage(): Promise<{ bytes: number; packs: number }> {
+    let bytes = 0;
+    let packs = 0;
+    const walk = async (p: string): Promise<void> => {
+      let names: string[];
+      try {
+        names = await this.pfs.readdir(p);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        const full = `${p}/${name}`;
+        const st = await this.pfs.stat(full);
+        if (st.isDirectory()) await walk(full);
+        else {
+          bytes += st.size;
+          if (name.endsWith('.pack')) packs++;
+        }
+      }
+    };
+    await walk(`${this.dir}/.git/objects`);
+    return { bytes, packs };
+  }
+
+  private baselinePath = () => `${this.dir}/.git/owl-baseline`;
+
+  private async rmrf(p: string): Promise<void> {
+    let st;
+    try {
+      st = await this.pfs.stat(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      for (const name of await this.pfs.readdir(p)) await this.rmrf(`${p}/${name}`);
+      await this.pfs.rmdir(p);
+    } else {
+      await this.pfs.unlink(p);
+    }
+  }
+
+  /**
+   * Сборка мусора по-простому (в isomorphic-git её нет): в копии остаются картинки, удалённые
+   * из репозитория, и копятся pack-файлы. Когда копия выросла больше чем вдвое (+2 МБ) против
+   * размера после свежего скачивания или pack-файлов больше MAX_PACKS — стираем её и скачиваем
+   * заново только последний коммит. Возвращает true, если копия пересобрана.
+   * `force` — пересобрать в любом случае.
+   */
+  async compactIfBloated(force = false): Promise<boolean> {
+    const { bytes, packs } = await this.storageUsage();
+    const baseline = Number(await this.pfs.readFile(this.baselinePath(), 'utf8').catch(() => '0')) || 0;
+    if (!baseline && !force) {
+      // Копия от прошлой версии — считаем точкой отсчёта текущий размер
+      if (bytes) await this.pfs.writeFile(this.baselinePath(), String(bytes), 'utf8');
+      return false;
+    }
+    if (!force && bytes <= baseline * 2 + COMPACT_SLACK_BYTES && packs <= MAX_PACKS) return false;
+    await this.rmrf(`${this.dir}/.git`);
+    await this.fetchLatest();
+    return true;
+  }
+
+  /**
+   * Скачивает последний коммит ветки. Возвращает его oid.
+   *
+   * Первый раз — неглубоко (только последний коммит), дальше — обычная догрузка новых объектов.
+   * Локальная ветка (refs/heads/<branch>) переставляется на скачанный коммит: при singleBranch
+   * isomorphic-git сообщает серверу «уже есть» только по ней. Раньше её не было, fetch шёл с deepen,
+   * и каждая синхронизация скачивала весь репозиторий заново новым pack-файлом
+   * (замер scripts/measure-git-growth.ts: 23 МБ локально при 300 КБ данных).
+   */
   async fetchLatest(): Promise<string> {
     await this.ensureInit();
+    const have = await git.resolveRef({ ...this.base, ref: `refs/heads/${this.cfg.branch}` }).catch(() => null);
     const res = await git.fetch({
       ...this.base,
       http: this.http,
       remote: 'origin',
       ref: this.cfg.branch,
       singleBranch: true,
-      depth: 1,
+      // Первый раз — только последний коммит. Дальше — обычная догрузка: с deepen сервер
+      // пересылает всё дерево, даже если «уже есть» ему сообщили
+      ...(have ? {} : { depth: 1 }),
       tags: false,
       onAuth: this.cfg.token ? this.onAuth : undefined,
     });
     if (!res.fetchHead) throw new Error(`Ветка ${this.cfg.branch} пуста или не найдена`);
+    await git.writeRef({ ...this.base, ref: `refs/heads/${this.cfg.branch}`, value: res.fetchHead, force: true });
+    // Свежая копия — точка отсчёта для compactIfBloated
+    if (!have) await this.pfs.writeFile(this.baselinePath(), String((await this.storageUsage()).bytes || 1), 'utf8');
     return res.fetchHead;
   }
 
@@ -154,7 +263,7 @@ export class DataRepo {
   /** Читает все данные на коммите `head`. Невалидные файлы пропускаются. */
   async readSnapshot(head: string): Promise<Snapshot> {
     const problems: string[] = [];
-    const snap: Snapshot = { head, emotes: {}, badges: {}, paints: {}, users: {}, images: {}, problems };
+    const snap: Snapshot = { head, emotes: {}, badges: {}, badgeInfo: {}, paints: {}, users: {}, nameplates: {}, profiles: {}, images: {}, problems };
 
     for (const e of await this.listDir(head, 'img')) {
       if (e.type === 'blob') snap.images[`img/${e.path}`] = e.oid;
@@ -165,12 +274,18 @@ export class DataRepo {
       snap.emotes[v.code] = v;
     for (const [, v] of await this.readJsonDir(head, 'badges', BadgeSchema, problems, (n, v) => n === v.id && hasImage(v.image)))
       snap.badges[v.id] = v;
+    for (const [id, v] of await this.readJsonDir(head, 'badges-info', BadgeInfoSchema, problems, (n) => SLUG_RE.test(n)))
+      snap.badgeInfo[id] = v;
     for (const [, v] of await this.readJsonDir(head, 'paints', PaintSchema, problems, (n, v) => n === v.id))
       snap.paints[v.id] = v;
     for (const platform of PLATFORMS) {
       for (const [nick, v] of await this.readJsonDir(head, `users/${platform}`, UserSchema, problems, (n) => n === normalizeNick(n) && isValidNick(platform, n)))
         snap.users[userKey(platform, nick)] = v;
+      for (const [nick, v] of await this.readJsonDir(head, `profiles/${platform}`, ProfileSchema, problems, (n) => n === normalizeNick(n) && isValidNick(platform, n)))
+        snap.profiles[userKey(platform, nick)] = v;
     }
+    for (const [, v] of await this.readJsonDir(head, 'nameplates', NameplateSchema, problems, (n, v) => n === v.id && (!v.image || hasImage(v.image))))
+      snap.nameplates[v.id] = v;
     return snap;
   }
 
@@ -214,6 +329,7 @@ export class DataRepo {
     authorName: string,
   ): Promise<string> {
     if (!this.cfg.token) throw new Error('Не введён ключ доступа для загрузки');
+    await this.compactIfBloated();
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_PUSH_ATTEMPTS; attempt++) {
       const head = await this.fetchLatest();
@@ -242,7 +358,11 @@ export class DataRepo {
           headers: this.authHeaders(),
           onAuth: this.onAuth,
         });
-        if (res.ok) return oid;
+        if (res.ok) {
+          // Свой коммит уже есть локально — следующий fetch не будет скачивать его обратно
+          await git.writeRef({ ...this.base, ref: `refs/heads/${this.cfg.branch}`, value: oid, force: true });
+          return oid;
+        }
         lastError = new Error(res.error ?? 'push отклонён');
         if (!isRetryable(res.error ?? '')) throw lastError;
       } catch (e) {

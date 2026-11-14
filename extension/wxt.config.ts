@@ -31,5 +31,11 @@ export default defineConfig({
       ...(bttvTestHost ? [`${new URL(bttvTestHost).origin}/*`] : []),
     ],
     action: { default_title: 'Owl Smile' },
+    commands: {
+      'toggle-owl': {
+        suggested_key: { default: 'Alt+Shift+O' },
+        description: 'Включить или выключить Owl Smile в чате',
+      },
+    },
   },
 });

@@ -21,6 +21,8 @@ export interface BttvEmote {
   animated: boolean;
   w?: number;
   h?: number;
+  /** Кто загрузил на BetterTTV (у общих смайлов канала; у своих смайлов канала — сам канал). */
+  by?: string;
 }
 
 export interface BttvGlobal {
@@ -125,6 +127,9 @@ export function parseEmotes(list: unknown): BttvEmote[] {
     if (typeof code !== 'string' || !code || code.length > 100 || /\s/.test(code) || seen.has(code)) continue;
     seen.add(code);
     const item: BttvEmote = { id, code, animated: e.animated === true };
+    const user = isObj(e.user) ? e.user : null;
+    const by = user && (typeof user.displayName === 'string' && user.displayName ? user.displayName : user.name);
+    if (typeof by === 'string' && by.length <= 40 && !/[\u0000-\u001f\u007f]/.test(by)) item.by = by;
     const w = dim(e.width);
     const h = dim(e.height);
     if (w && h) Object.assign(item, { w, h });

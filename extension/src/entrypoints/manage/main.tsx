@@ -4,11 +4,12 @@ import { config, isConfigured } from '../../shared/config';
 import { BadgesTab } from '../../manage/ui/badges';
 import { RunnerContext, StatusLine, useCache, useRunnerState, useSettings } from '../../manage/ui/common';
 import { EmotesTab } from '../../manage/ui/emotes';
+import { NameplatesTab } from '../../manage/ui/nameplates';
 import { KeyForm, useKey } from '../../manage/ui/key';
 import { PaintsTab } from '../../manage/ui/paints';
 import { UsersTab } from '../../manage/ui/users';
 
-const TABS = { emotes: 'Смайлы', badges: 'Иконки', paints: 'Эффекты ников', users: 'Зрители' } as const;
+const TABS = { emotes: 'Смайлы', badges: 'Иконки', paints: 'Эффекты ников', nameplates: 'Подложки', users: 'Зрители' } as const;
 type Tab = keyof typeof TABS;
 
 function App() {
@@ -55,6 +56,7 @@ function App() {
             {tab === 'emotes' && <EmotesTab cache={cache} author={settings.author} />}
             {tab === 'badges' && <BadgesTab cache={cache} author={settings.author} />}
             {tab === 'paints' && <PaintsTab cache={cache} />}
+            {tab === 'nameplates' && <NameplatesTab cache={cache} author={settings.author} />}
             {tab === 'users' && <UsersTab cache={cache} />}
           </>
         )}

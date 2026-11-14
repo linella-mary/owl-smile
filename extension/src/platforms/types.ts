@@ -22,6 +22,13 @@ export interface ChatAdapter {
    * блока ввода «кликом мимо» и что-то сбрасывает (VK Live в режиме ответа стирал ответ и текст).
    */
   getPickerContainer?(): Element | null;
+  /** Площадка сама всегда показывает время сообщений (VK Live) — своё время не ставим. */
+  ownTimestamps?: boolean;
+  /**
+   * Профиль Owl по клику на ник: 'augment' — блок в карточке площадки (Twitch, twitch-card.ts),
+   * 'card' — наша карточка вместо неё у пользователей Owl Smile (VK Live, profile-card.ts).
+   */
+  profileMode: 'augment' | 'card';
 }
 
 /** Все текстовые узлы внутри элементов. */

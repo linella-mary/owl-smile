@@ -17,6 +17,9 @@ import { textNodesIn, type ChatAdapter } from './types';
 export const vkliveAdapter: ChatAdapter = {
   platform: 'vk',
   messageSelector: '[data-role="messageContainer"]',
+  // У каждого сообщения VK уже есть время (ChatMessage_publishTime_)
+  ownTimestamps: true,
+  profileMode: 'card',
 
   getAuthor(msg) {
     const raw = this.getUsernameElement(msg)?.textContent;

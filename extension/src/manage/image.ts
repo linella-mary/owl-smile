@@ -17,12 +17,16 @@ export const IMAGE_LIMITS = {
   emoteMaxRatio: 4,
   badgeSize: 72,
   badgeRecommendedMin: 36,
+  /** Подложка под ник: показ ~20–24 px по высоте, хранение до 64 px (≈3x), полоса до 8:1. */
+  nameplateHeight: 64,
+  nameplateMaxRatio: 8,
   /** Готовая анимация — столько хранит у себя каждый зритель. */
   maxAnimatedBytes: 512 * 1024,
   maxFrames: 300,
 } as const;
 
 export type ImageKind = 'png' | 'jpeg' | 'gif' | 'webp';
+export type ImagePurpose = 'emote' | 'badge' | 'nameplate';
 
 /** Определяет формат по сигнатуре (а не по расширению имени файла). */
 export function sniff(b: Uint8Array): ImageKind | null {
@@ -57,6 +61,12 @@ export function emoteSize(srcW: number, srcH: number): { w: number; h: number } 
   return { w: Math.max(1, Math.round((srcW * h) / srcH)), h };
 }
 
+/** Размер подложки: высота до 64, пропорции сохраняются, без увеличения. */
+export function nameplateSize(srcW: number, srcH: number): { w: number; h: number } {
+  const h = Math.min(IMAGE_LIMITS.nameplateHeight, srcH);
+  return { w: Math.max(1, Math.round((srcW * h) / srcH)), h };
+}
+
 /** Размер иконки: вписать в 72×72, без увеличения. */
 export function badgeSize(srcW: number, srcH: number): { w: number; h: number } {
   const k = Math.min(1, IMAGE_LIMITS.badgeSize / Math.max(srcW, srcH));
@@ -64,7 +74,7 @@ export function badgeSize(srcW: number, srcH: number): { w: number; h: number } 
 }
 
 /** Подсказки о качестве исходника (не мешают загрузке). */
-export function qualityWarnings(purpose: 'emote' | 'badge', srcW: number, srcH: number): string[] {
+export function qualityWarnings(purpose: ImagePurpose, srcW: number, srcH: number): string[] {
   const out: string[] = [];
   if (purpose === 'emote' && srcH < IMAGE_LIMITS.emoteRecommendedMin)
     out.push(`Картинка мелкая (${srcW}×${srcH}): на чётких экранах будет размытой. Лучше от 112 px по высоте.`);
@@ -73,6 +83,8 @@ export function qualityWarnings(purpose: 'emote' | 'badge', srcW: number, srcH: 
       out.push(`Иконка мелкая (${srcW}×${srcH}): лучше от 72×72.`);
     if (Math.abs(srcW - srcH) > Math.max(srcW, srcH) * 0.1) out.push('Иконка не квадратная — по бокам останутся пустые поля.');
   }
+  if (purpose === 'nameplate' && srcW < srcH * 2)
+    out.push('Подложка узкая: под длинным ником её обрежет сверху и снизу. Лучше широкая полоса, от 4:1.');
   return out;
 }
 
@@ -95,7 +107,7 @@ export interface PrepareResult extends PreparedImage {
  *  - анимированные смайлы → уменьшаются до 112 px по высоте (GIF); если уже маленькие и лёгкие — как есть;
  *  - иконки всегда статичные (берётся первый кадр).
  */
-export async function prepareImage(file: Blob, purpose: 'emote' | 'badge'): Promise<PrepareResult> {
+export async function prepareImage(file: Blob, purpose: ImagePurpose): Promise<PrepareResult> {
   const L = IMAGE_LIMITS;
   if (file.size > L.maxInputBytes) throw new UserError('Файл больше 5 МБ');
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -114,11 +126,14 @@ export async function prepareImage(file: Blob, purpose: 'emote' | 'badge'): Prom
 
   try {
     if (purpose === 'emote' && srcW / srcH > L.emoteMaxRatio) throw new UserError('Слишком широкая картинка (максимум 4:1)');
+    if (purpose === 'nameplate' && srcW / srcH > L.nameplateMaxRatio) throw new UserError('Слишком широкая картинка (максимум 8:1)');
     const warnings = qualityWarnings(purpose, srcW, srcH);
+    const sizeOf = purpose === 'emote' ? emoteSize : purpose === 'nameplate' ? nameplateSize : badgeSize;
 
-    if (purpose === 'emote' && isAnimated(bytes, kind)) {
-      const target = emoteSize(srcW, srcH);
-      const keepOriginal = srcH <= L.emoteHeight && bytes.length <= L.maxAnimatedBytes;
+    // Анимация — у смайлов и подложек; иконки всегда статичные
+    if (purpose !== 'badge' && isAnimated(bytes, kind)) {
+      const target = sizeOf(srcW, srcH);
+      const keepOriginal = srcH <= target.h && bytes.length <= L.maxAnimatedBytes;
       let out: { bytes: Uint8Array; w: number; h: number; frames: number; ext: 'gif' | 'webp' };
       if (keepOriginal) {
         out = { bytes, w: srcW, h: srcH, frames: 0, ext: kind === 'gif' ? 'gif' : 'webp' };
@@ -131,7 +146,7 @@ export async function prepareImage(file: Blob, purpose: 'emote' | 'badge'): Prom
           throw e;
         }
       } else {
-        throw new UserError('Браузер не умеет уменьшать анимацию — загрузите GIF высотой до 112 px');
+        throw new UserError(`Браузер не умеет уменьшать анимацию — загрузите GIF высотой до ${target.h} px`);
       }
       if (out.bytes.length > L.maxAnimatedBytes)
         throw new UserError(
@@ -150,7 +165,7 @@ export async function prepareImage(file: Blob, purpose: 'emote' | 'badge'): Prom
       };
     }
 
-    const { w, h } = purpose === 'emote' ? emoteSize(srcW, srcH) : badgeSize(srcW, srcH);
+    const { w, h } = sizeOf(srcW, srcH);
     const canvas = new OffscreenCanvas(w, h);
     const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingQuality = 'high';

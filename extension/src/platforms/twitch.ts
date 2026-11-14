@@ -8,6 +8,7 @@ import { textNodesIn, type ChatAdapter } from './types';
 export const twitchAdapter: ChatAdapter = {
   platform: 'twitch',
   messageSelector: '.chat-line__message, .vod-message',
+  profileMode: 'augment',
 
   getAuthor(msg) {
     const login =

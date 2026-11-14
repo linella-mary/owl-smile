@@ -13,14 +13,22 @@ import {
 } from '../shared/bttv';
 import { K_INDEX, getImages, type LocalIndex } from '../shared/cache';
 import type { OwlMessage } from '../shared/messages';
+import { DEFAULT_SETTINGS, loadSettings, onSettingsChanged, type Settings } from '../shared/settings';
+import { applySettings } from './apply-settings';
+import { plateView } from './paint';
+import { installHover } from './hover';
 import { EmotePicker, installTabCompletion } from './picker';
+import { ChatLog } from './chat-log';
+import { installProfileCards } from './profile-card';
+import { installTwitchCards } from './twitch-card';
 import { ChatRenderer, emptyData, type BttvView, type RenderData } from './renderer';
 
 /**
  * Загружает данные из локального кэша (без сети): база Owl Smile и списки BetterTTV —
  * глобальные и канала `bttvLogin` (null — смайлов канала нет).
+ * Источники смайлов, выключенные в настройках, не загружаются.
  */
-export async function loadRenderData(bttvLogin: string | null = null): Promise<RenderData> {
+export async function loadRenderData(bttvLogin: string | null = null, settings: Settings = DEFAULT_SETTINGS): Promise<RenderData> {
   const chKey = bttvLogin ? bttvChannelKey(bttvLogin) : null;
   const got = await browser.storage.local.get([K_INDEX, K_BTTV_GLOBAL, ...(chKey ? [chKey] : [])]);
   const idx = got[K_INDEX] as LocalIndex | undefined;
@@ -29,33 +37,51 @@ export async function loadRenderData(bttvLogin: string | null = null): Promise<R
 
   const data = emptyData();
   if (idx) {
-    const oids = new Set([...Object.values(idx.emotes).map((e) => e.img), ...Object.values(idx.badges).map((b) => b.img)]);
+    const plates = idx.nameplates ?? {};
+    const oids = new Set([
+      ...Object.values(idx.emotes).map((e) => e.img),
+      ...Object.values(idx.badges).map((b) => b.img),
+      ...Object.values(plates).flatMap((p) => (p.img ? [p.img] : [])),
+    ]);
     const images = await getImages([...oids]);
     data.paints = idx.paints;
     data.users = idx.users;
-    for (const [code, e] of Object.entries(idx.emotes)) {
+    data.profiles = idx.profiles ?? {};
+    for (const [id, p] of Object.entries(plates)) {
+      const view = plateView(p, p.img ? images[p.img] : undefined);
+      if (view) data.nameplates.set(id, view);
+    }
+    for (const [code, e] of settings.owlEmotes ? Object.entries(idx.emotes) : []) {
       const src = images[e.img];
-      if (src) data.emotes.set(code, { src, w: e.w, h: e.h });
+      if (src) data.emotes.set(code, { src, w: e.w, h: e.h, animated: e.animated, author: e.author, createdAt: e.createdAt });
+    }
+    for (const [code, e] of Object.entries(idx.emotes)) {
+      const who = e.author.trim().toLowerCase();
+      data.emotesByAuthor.set(who, [...(data.emotesByAuthor.get(who) ?? []), code]);
     }
     for (const [id, b] of Object.entries(idx.badges)) {
       const src = images[b.img];
-      if (src) data.badges.set(id, { src, title: b.title });
+      if (src) data.badges.set(id, { src, title: b.title, description: b.description });
     }
   }
 
   // BetterTTV: смайлы канала важнее глобальных, Owl Smile важнее обоих
-  const addBttv = (list: BttvEmote[] | undefined): string[] => {
+  /** channelName — смайлы канала: у своих смайлов канала автор — сам канал. */
+  const addBttv = (list: BttvEmote[] | undefined, channelName?: string): string[] => {
     const codes: string[] = [];
-    for (const e of list ?? []) {
+    for (const e of settings.bttvEmotes ? (list ?? []) : []) {
       if (data.emotes.has(e.code)) continue;
-      data.emotes.set(e.code, { src: bttvImg(e.id, 1), srcset: bttvSrcset(e.id), w: e.w ?? 28, h: e.h ?? 28, bttv: true });
+      data.emotes.set(e.code, {
+        src: bttvImg(e.id, 1), srcset: bttvSrcset(e.id), w: e.w ?? 28, h: e.h ?? 28, bttv: true, animated: e.animated,
+        author: e.by ?? channelName, channel: channelName,
+      });
       codes.push(e.code);
     }
     return codes;
   };
   const view: BttvView = { global: [], channel: null };
   if (bttvLogin) {
-    const codes = addBttv(channel?.emotes);
+    const codes = addBttv(channel?.emotes, channel?.name ?? bttvLogin);
     const state = !channel ? 'loading' : channel.missing ? 'missing' : channel.error && !channel.at ? 'error' : 'ok';
     view.channel = { login: bttvLogin, name: channel?.name ?? bttvLogin, codes, state, error: channel?.error };
   }
@@ -74,10 +100,14 @@ async function currentBttvLogin(adapter: ChatAdapter): Promise<string | null> {
 /** Запуск на странице площадки: первичный проход, слежение за чатом, обновление при синхронизации. */
 export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRenderer; data: () => RenderData }> {
   // Стили под вёрстку площадки (style.css: .owl-vk …)
-  document.documentElement.classList.add(`owl-${adapter.platform}`);
+  const html = document.documentElement;
+  html.classList.add(`owl-${adapter.platform}`);
+  let settings = await loadSettings();
+  applySettings(html, settings, adapter.platform);
   let login = await currentBttvLogin(adapter);
-  let data = await loadRenderData(login);
-  const renderer = new ChatRenderer(adapter, data);
+  let data = await loadRenderData(login, settings);
+  const log = new ChatLog();
+  const renderer = new ChatRenderer(adapter, data, settings, log);
   renderer.processTree(document);
 
   // Фоновый скрипт обновит списки BetterTTV, если они устарели; новые придут через storage.onChanged
@@ -89,7 +119,7 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
   let loadSeq = 0;
   const reload = () => {
     const seq = ++loadSeq;
-    void loadRenderData(login).then((d) => {
+    void loadRenderData(login, settings).then((d) => {
       if (seq !== loadSeq) return; // пока грузили, пришли данные новее
       data = d;
       renderer.setData(d);
@@ -104,9 +134,28 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
     reload();
   };
 
-  const picker = new EmotePicker(adapter, () => data);
+  const picker = new EmotePicker(adapter, () => data, () => settings);
   picker.ensureButton();
-  const removeTab = installTabCompletion(adapter, () => data);
+  const removeTab = installTabCompletion(adapter, () => data, () => settings);
+  const removeHover = installHover(() => settings, () => data);
+  const removeCards =
+    adapter.profileMode === 'augment'
+      ? installTwitchCards(adapter, () => data, () => settings, log)
+      : installProfileCards(adapter, () => data, () => settings, log);
+
+  // Личные настройки поменялись (на странице настроек, в окне расширения, горячей клавишей):
+  // возвращаем чат к исходному виду и рисуем заново — так снимается и то, что теперь выключено.
+  const removeSettings = onSettingsChanged((next) => {
+    const sourcesChanged = next.owlEmotes !== settings.owlEmotes || next.bttvEmotes !== settings.bttvEmotes;
+    settings = next;
+    applySettings(html, settings, adapter.platform);
+    renderer.reset(document);
+    renderer.setSettings(settings);
+    picker.close();
+    picker.ensureButton();
+    if (sourcesChanged) reload();
+    else renderer.processTree(document);
+  });
 
   const sel = adapter.messageSelector;
   let href = location.href;
@@ -116,6 +165,9 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
     if (!browser.runtime?.id) {
       observer.disconnect();
       removeTab();
+      removeHover();
+      removeCards();
+      removeSettings();
       picker.dispose();
       return;
     }
@@ -131,8 +183,9 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
         const el = n instanceof Element ? n : n.parentElement;
         if (!el) continue;
         const msg = el.closest(sel);
-        if (msg) renderer.processMessage(msg, true);
-        else if (n instanceof Element) renderer.processTree(n);
+        // live: новое сообщение (а не изменение внутри старого) — ему ставится время
+        if (msg) renderer.processMessage(msg, true, msg === n);
+        else if (n instanceof Element) renderer.processTree(n, true);
       }
     }
   });

@@ -1,10 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { Snapshot } from '../src/git/repo';
-import { addBadge, addEmote, deleteBadge, deleteEmote, deletePaint, renameEmote, setUser, type PreparedImage } from '../src/manage/ops';
+import {
+  addBadge,
+  addEmote,
+  addNameplate,
+  combine,
+  deleteBadge,
+  deleteEmote,
+  deleteNameplate,
+  setBadgeDescription,
+  deletePaint,
+  renameEmote,
+  setNameplate,
+  setUser,
+  type PreparedImage,
+} from '../src/manage/ops';
 import { isAnimated, sniff } from '../src/manage/image';
 
 const A = 'img/aaaaaaaaaaaaaaaa.webp';
 const B = 'img/bbbbbbbbbbbbbbbb.webp';
+const C = 'img/cccccccccccccccc.gif';
 const dec = (b: Uint8Array | null | undefined) => (b ? JSON.parse(new TextDecoder().decode(b)) : b);
 
 function snap(): Snapshot {
@@ -13,9 +28,16 @@ function snap(): Snapshot {
     head: 'h',
     emotes: { CatJam: emote('CatJam', A), CatJam2: emote('CatJam2', A), OwlYes: emote('OwlYes', B) },
     badges: { founder: { id: 'founder', title: 'F', image: B, author: 'x' } },
+    badgeInfo: { founder: { description: 'с первого стрима', future: 1 } },
     paints: { gold: { id: 'gold', title: 'G', preset: 'solid', colors: ['#ffcc00'] } },
     users: { 'twitch:owl': { badges: ['founder'], paint: 'gold' }, 'vk:solo': { badges: ['founder'] } },
-    images: { [A]: 'oidA', [B]: 'oidB' },
+    nameplates: {
+      stars: { id: 'stars', title: 'Звёзды', kind: 'emoji', emoji: '⭐', author: 'x' },
+      strip: { id: 'strip', title: 'Полоса', kind: 'image', image: C, author: 'x' },
+    },
+    // about — поле будущей версии: должно сохраняться при перезаписи профиля
+    profiles: { 'twitch:owl': { nameplate: 'stars', about: 'привет' }, 'vk:solo': { nameplate: 'strip' } },
+    images: { [A]: 'oidA', [B]: 'oidB', [C]: 'oidC' },
     problems: [],
   };
 }
@@ -67,6 +89,63 @@ describe('операции', () => {
     expect(dec(ch.get('users/twitch/owl_viewer.json'))).toEqual({ badges: ['founder'], paint: 'gold' });
     expect(() => setUser('twitch', 'x', { badges: ['nope'] })(snap())).toThrow('не найдена');
     expect(setUser('vk', 'solo', { badges: [] })(snap()).get('users/vk/solo.json')).toBeNull();
+  });
+
+  it('addNameplate: эмодзи и картинка, проверки', () => {
+    const ch = addNameplate({ id: 'owl-stars', title: 'Совы', kind: 'emoji', emoji: '🦉✨', opacity: 0.456 }, 'me')(snap());
+    expect(dec(ch.get('nameplates/owl-stars.json'))).toEqual({ id: 'owl-stars', title: 'Совы', kind: 'emoji', emoji: '🦉✨', opacity: 0.46, author: 'me' });
+    const ch2 = addNameplate({ id: 'wide', title: 'W', kind: 'image', image: img('img/dddddddddddddddd.webp'), opacity: 1 }, 'me')(snap());
+    expect(ch2.has('img/dddddddddddddddd.webp')).toBe(true);
+    expect(() => addNameplate({ id: 'x1', title: 'T', kind: 'emoji', emoji: 'abc', opacity: 1 }, 'me')).toThrow('Только эмодзи');
+    expect(() => addNameplate({ id: 'x1', title: 'T', kind: 'emoji', emoji: '🦉🦉🦉🦉🦉🦉🦉', opacity: 1 }, 'me')).toThrow('Только эмодзи');
+    expect(() => addNameplate({ id: 'x1', title: 'T', kind: 'image', opacity: 1 }, 'me')).toThrow('картинку');
+    expect(() => addNameplate({ id: 'stars', title: 'T', kind: 'emoji', emoji: '⭐', opacity: 1 }, 'me')(snap())).toThrow('уже есть');
+  });
+
+  it('deleteNameplate: снимает со зрителей (остальной профиль цел), удаляет ненужную картинку', () => {
+    const ch = deleteNameplate('stars')(snap());
+    expect(ch.get('nameplates/stars.json')).toBeNull();
+    expect(dec(ch.get('profiles/twitch/owl.json'))).toEqual({ about: 'привет' });
+    const ch2 = deleteNameplate('strip')(snap());
+    expect(ch2.get('profiles/vk/solo.json')).toBeNull(); // пустой профиль — файл удаляется
+    expect(ch2.get(C)).toBeNull();
+  });
+
+  it('удаление смайла не трогает картинку, нужную подложке', () => {
+    const s = snap();
+    s.emotes.Strip = { code: 'Strip', image: C, animated: true, w: 28, h: 28, author: 'x', createdAt: '' };
+    expect(deleteEmote('Strip')(s).has(C)).toBe(false);
+  });
+
+  it('setNameplate: назначает и снимает, не теряя других полей профиля', () => {
+    expect(dec(setNameplate('twitch', 'Owl', 'strip')(snap()).get('profiles/twitch/owl.json'))).toEqual({ nameplate: 'strip', about: 'привет' });
+    expect(dec(setNameplate('twitch', 'owl', undefined)(snap()).get('profiles/twitch/owl.json'))).toEqual({ about: 'привет' });
+    const fresh = dec(setNameplate('vk', 'Новый Ник', 'stars')(snap()).get('profiles/vk/новый ник.json'));
+    // Новый профиль получает дату «в Owl Smile с…»
+    expect(fresh).toEqual({ nameplate: 'stars', since: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
+    expect(setNameplate('twitch', 'owl', 'stars')(snap()).size).toBe(0);
+    expect(() => setNameplate('twitch', 'owl', 'nope')(snap())).toThrow('не найдена');
+    expect(() => setNameplate('twitch', 'bad nick!', 'stars')).toThrow();
+  });
+
+  it('combine: оформление и подложка одним коммитом', () => {
+    const ch = combine(setUser('twitch', 'newbie', { badges: ['founder'] }), setNameplate('twitch', 'newbie', 'stars'))(snap());
+    expect([...ch.keys()].sort()).toEqual(['profiles/twitch/newbie.json', 'users/twitch/newbie.json']);
+  });
+
+  it('описание иконки: отдельным файлом, правка сохраняет незнакомые поля, удаление иконки удаляет и его', () => {
+    const ch = addBadge('mod', 'Модератор', img(A), 'me', '  Следит за порядком  ')(snap());
+    expect(dec(ch.get('badges/mod.json'))).toEqual({ id: 'mod', title: 'Модератор', image: A, author: 'me' }); // формат старых версий
+    expect(dec(ch.get('badges-info/mod.json'))).toEqual({ description: 'Следит за порядком' });
+    expect(addBadge('mod2', 'M', img(A), 'me')(snap()).has('badges-info/mod2.json')).toBe(false);
+    expect(() => addBadge('mod3', 'M', img(A), 'me', 'x'.repeat(201))).toThrow('до 200');
+
+    expect(dec(setBadgeDescription('founder', 'новое')(snap()).get('badges-info/founder.json'))).toEqual({ description: 'новое', future: 1 });
+    expect(dec(setBadgeDescription('founder', '')(snap()).get('badges-info/founder.json'))).toEqual({ future: 1 });
+    expect(setBadgeDescription('founder', 'с первого стрима')(snap()).size).toBe(0);
+    expect(() => setBadgeDescription('nope', 'x')(snap())).toThrow('не найдена');
+
+    expect(deleteBadge('founder')(snap()).get('badges-info/founder.json')).toBeNull();
   });
 
   it('addBadge: проверка ID', () => {

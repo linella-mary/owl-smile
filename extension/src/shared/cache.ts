@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import type { NameplateKind, PlateAnim, PlatePattern, PlateShape, Platform } from './ids';
 import type { Paint, UserCosmetics } from './schema';
 
 /**
@@ -12,11 +13,64 @@ import type { Paint, UserCosmetics } from './schema';
 export interface LocalIndex {
   head: string;
   syncedAt: number;
-  emotes: Record<string, { img: string; animated: boolean; w: number; h: number; author: string }>;
-  badges: Record<string, { img: string; title: string }>;
+  emotes: Record<string, { img: string; animated: boolean; w: number; h: number; author: string; createdAt?: string }>;
+  badges: Record<string, { img: string; title: string; description?: string }>;
   paints: Record<string, Paint>;
   users: Record<string, UserCosmetics>;
+  /** Нет в кэше, сохранённом версиями до подложек (до первой синхронизации после обновления). */
+  nameplates?: Record<string, LocalNameplate>;
+  /** Только известные поля профиля. */
+  profiles?: Record<string, LocalProfile>;
 }
+
+export interface LocalNameplate {
+  title: string;
+  kind: NameplateKind;
+  /** oid картинки (kind: image). */
+  img?: string;
+  emoji?: string;
+  opacity?: number;
+  pattern?: PlatePattern;
+  symbols?: string;
+  colors?: string[];
+  glow?: number;
+  anim?: PlateAnim;
+  speed?: number;
+  shape?: PlateShape;
+  fade?: boolean;
+  alt?: PlateAlt;
+}
+
+/** Второй слой подложки (чередование «1-2-1-2» или шахматка). */
+export interface PlateAlt {
+  color: string;
+  pattern?: PlatePattern;
+  checker?: boolean;
+}
+
+/** Поля подложки, которые переносятся из репозитория в кэш как есть (уже проверены схемой). */
+export const NAMEPLATE_STYLE_FIELDS = ['emoji', 'opacity', 'pattern', 'symbols', 'colors', 'glow', 'anim', 'speed', 'shape', 'fade', 'alt'] as const satisfies readonly (keyof LocalNameplate)[];
+
+export interface LocalProfile {
+  nameplate?: string;
+  about?: string;
+  pronouns?: string;
+  links?: { title: string; url: string }[];
+  favEmotes?: string[];
+  alsoOn?: { platform: Platform; nick: string };
+  accent?: string;
+  status?: string;
+  birthday?: string;
+  timezone?: string;
+  interests?: string[];
+  languages?: string[];
+  since?: string;
+}
+
+/** Поля профиля, которые эта версия знает и показывает. */
+export const PROFILE_FIELDS = [
+  'nameplate', 'about', 'pronouns', 'links', 'favEmotes', 'alsoOn', 'accent', 'status', 'birthday', 'timezone', 'interests', 'languages', 'since',
+] as const satisfies readonly (keyof LocalProfile)[];
 
 export interface SyncStatus {
   state: 'idle' | 'syncing' | 'error';

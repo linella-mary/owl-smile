@@ -19,7 +19,13 @@ export function useCache(): CacheView {
   useEffect(() => {
     const load = async () => {
       const index = await getIndex();
-      const oids = index ? [...Object.values(index.emotes).map((e) => e.img), ...Object.values(index.badges).map((b) => b.img)] : [];
+      const oids = index
+        ? [
+            ...Object.values(index.emotes).map((e) => e.img),
+            ...Object.values(index.badges).map((b) => b.img),
+            ...Object.values(index.nameplates ?? {}).flatMap((p) => (p.img ? [p.img] : [])),
+          ]
+        : [];
       setView({ index, images: await getImages([...new Set(oids)]) });
     };
     void load();
@@ -56,6 +62,8 @@ export interface RunState {
 export interface Runner extends RunState {
   /** Применить изменение к репозиторию и синхронизировать. Возвращает true при успехе. */
   run(title: string, mutation: (snap: Snapshot) => Changes): Promise<boolean>;
+  /** Показать ошибку проверки формы (до записи). Возвращает false. */
+  fail(e: unknown): Promise<boolean>;
 }
 
 export const RunnerContext = createContext<Runner | null>(null);
@@ -66,6 +74,11 @@ export function useRunnerState(author: string): Runner {
   return useMemo(
     () => ({
       ...state,
+      async fail(e) {
+        const text = e instanceof UserError ? e.message : `Ошибка: ${e instanceof Error ? e.message : String(e)}`;
+        setState({ busy: false, message: { kind: 'err', text } });
+        return false;
+      },
       async run(title, mutation) {
         if (!author.trim()) {
           setState({ busy: false, message: { kind: 'err', text: 'Сначала укажите свой ник вверху страницы' } });

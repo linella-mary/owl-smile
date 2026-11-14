@@ -183,6 +183,17 @@ async function storage(sw: Worker, key: string): Promise<any> {
   }, key);
 }
 
+type SyncArea = { get(k: string | null): Promise<Record<string, unknown>>; set(i: Record<string, unknown>): Promise<void>; remove(k: string[]): Promise<void> };
+
+/** Личные настройки (chrome.storage.sync, ключи owl:p:<поле>); null — вернуть все по умолчанию. */
+async function setPrefs(sw: Worker, prefs: Record<string, unknown> | null): Promise<void> {
+  await sw.evaluate(async (p) => {
+    const area = (globalThis as unknown as { chrome: { storage: { sync: SyncArea } } }).chrome.storage.sync;
+    if (p) await area.set(Object.fromEntries(Object.entries(p).map(([k, v]) => [`owl:p:${k}`, v])));
+    else await area.remove(Object.keys(await area.get(null)).filter((k) => k.startsWith('owl:p:')));
+  }, prefs);
+}
+
 async function main() {
   const server = await startGitServer({
     'meta.json': JSON.stringify({ schema: 1 }),
@@ -190,9 +201,21 @@ async function main() {
     'emotes/CatJam.json': emote('CatJam'),
     'emotes/CatJam2.json': emote('CatJam2'),
     'badges/founder.json': JSON.stringify({ id: 'founder', title: 'Основатель', image: IMG, author: 'seed' }),
+    'badges-info/founder.json': JSON.stringify({ description: 'С совятником с первого стрима' }),
     'paints/gold.json': JSON.stringify({ id: 'gold', title: 'Золото', preset: 'shimmer', colors: ['#ffcc00', '#ff5e00'] }),
     'users/twitch/owl_viewer.json': JSON.stringify({ badges: ['founder'], paint: 'gold' }),
     'users/vk/данил кузнецов..json': JSON.stringify({ badges: ['founder'], paint: 'gold' }),
+    'nameplates/stars.json': JSON.stringify({ id: 'stars', title: 'Звёзды', kind: 'emoji', emoji: '⭐🦉', opacity: 0.5, author: 'seed' }),
+    'profiles/twitch/owl_viewer.json': JSON.stringify({
+      nameplate: 'stars', about: 'Совиный модератор', pronouns: 'он', accent: '#3a1d6e',
+      links: [{ title: 'Телеграм', url: 'https://t.me/owl' }], favEmotes: ['CatJam'], alsoOn: { platform: 'vk', nick: 'данил кузнецов.' },
+      future: 'поле будущей версии',
+    }),
+    'nameplates/bolts.json': JSON.stringify({
+      id: 'bolts', title: 'Молнии', kind: 'pattern', pattern: 'lightning', colors: ['#bf94ff'], glow: 0.6, shape: 'pill', anim: 'slide', speed: 5,
+      alt: { color: '#00e5ff', checker: true }, author: 'seed',
+    }),
+    'profiles/vk/данил кузнецов..json': JSON.stringify({ nameplate: 'bolts', status: 'Смотрю стрим', birthday: '01-15' }),
   });
 
   const bttvServer = await startBttvServer();
@@ -234,6 +257,78 @@ async function main() {
     check('смайл в сообщении', Boolean(emoteImg));
     check('иконка у ника', (await page.$$('.owl-badges img.owl-badge')).length === 1);
     check('эффект ника', await page.$eval('.chat-author__display-name', (el) => el.classList.contains('owl-paint--shimmer')));
+    const plate = await page.$eval('.chat-author__display-name', (el) => ({
+      cls: el.classList.contains('owl-plate'),
+      before: getComputedStyle(el, '::before').backgroundImage.startsWith('url("data:image/svg+xml'),
+      text: el.textContent,
+    }));
+    check('подложка под ником (эмодзи) вместе с эффектом', plate.cls && plate.before && plate.text === 'Owl_Viewer', JSON.stringify(plate));
+
+    // Профиль Owl на Twitch: блок Owl внутри карточки зрителя Twitch (сама карточка остаётся Twitch-овской)
+    await page.evaluate(() => {
+      const w = window as unknown as { __native: number };
+      w.__native = 0;
+      // Как Twitch: по клику на ник чуть позже открывается его карточка зрителя
+      document.getElementById('chat')!.addEventListener('click', (e) => {
+        const target = e.target as Element;
+        const m = target.closest('[data-a-user]');
+        if (!m || !target.closest('.chat-author__display-name')) return;
+        w.__native++;
+        setTimeout(() => {
+          document.querySelector('.viewer-card-layer')?.remove();
+          const layer = document.createElement('div');
+          layer.className = 'viewer-card-layer';
+          layer.style.cssText = 'position:fixed;left:20px;top:40px;width:340px;background:#18181b;border:1px solid #444;border-radius:6px;color:#fff;font:13px sans-serif';
+          layer.innerHTML =
+            '<div class="viewer-card" data-a-target="viewer-card"><div class="viewer-card-header__banner" style="height:60px;background:#333;padding:8px">' +
+            '<b class="viewer-card-header__display-name"></b></div><div class="viewer-card__body" style="padding:8px">Значки · Подарить подписку · Отслеживать</div></div>';
+          layer.querySelector('.viewer-card-header__display-name')!.textContent = m.getAttribute('data-a-user');
+          document.body.append(layer);
+        }, 150);
+      });
+    });
+    const nativeClicks = () => page.evaluate(() => (window as unknown as { __native: number }).__native);
+    const blockText = () => page.evaluate(() => document.querySelector('.viewer-card .owl-vc-host')?.shadowRoot?.textContent ?? null);
+    await page.click('[data-a-user="owl_viewer"] .chat-author__display-name');
+    const shown = await waitFor(async () => ((await blockText())?.includes('Совиный модератор') ? await blockText() : null), 3000);
+    const twitchBody = await page.textContent('.viewer-card__body');
+    check('профиль Twitch: блок Owl внутри карточки Twitch, она сама на месте', Boolean(shown) && (await nativeClicks()) === 1 && Boolean(twitchBody?.includes('Подарить подписку')));
+    check('профиль: «Пользователь Owl Smile», ссылки с меткой соцсети, любимые смайлы, другая площадка',
+      Boolean(shown?.includes('Пользователь Owl Smile') && shown.includes('TG') && shown.includes('Телеграм') && shown.includes('Любимые смайлы') && shown.includes('Также на VK Live')),
+      shown?.slice(0, 120) ?? '');
+    check('профиль: что носит — эффект и подложка', Boolean(shown?.includes('эффект: Золото') && shown.includes('подложка: Звёзды')));
+    const cardBadge = await page.evaluate(() => document.querySelector('.viewer-card .owl-vc-host')!.shadowRoot!.querySelector('.badge')?.textContent ?? '');
+    check('профиль: иконка с описанием', cardBadge === 'ОсновательС совятником с первого стрима', cardBadge);
+    check('иконка в чате: описание в подсказке', (await page.getAttribute('.owl-badges img.owl-badge', 'title')) === 'Основатель — С совятником с первого стрима');
+    if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-card.png') });
+    // «Упомянуть» вставляет @логин в поле ввода (в модель редактора, как у Slate)
+    await page.evaluate(() => (window as unknown as { __owlReset(): void }).__owlReset());
+    await page.evaluate(() => {
+      const btn = [...document.querySelector('.viewer-card .owl-vc-host')!.shadowRoot!.querySelectorAll('button')].find((b) => b.textContent === 'Упомянуть');
+      btn!.click();
+    });
+    const mentioned = await waitFor(
+      async () => ((await page.evaluate(() => (window as unknown as { __owlModel(): string }).__owlModel())) === '@owl_viewer ' ? 'ok' : null),
+      3000,
+    );
+    check('профиль: «Упомянуть» вставляет @ник', Boolean(mentioned), JSON.stringify(await page.evaluate(() => (window as unknown as { __owlModel(): string }).__owlModel())));
+    await page.evaluate(() => (window as unknown as { __owlReset(): void }).__owlReset());
+
+    await page.evaluate(() => {
+      const div = document.createElement('div');
+      div.className = 'chat-line__message';
+      div.setAttribute('data-a-user', 'plain_viewer');
+      div.innerHTML = '<span class="chat-line__username"><span class="chat-author__display-name">plain_viewer</span></span>: <span class="text-fragment">привет</span>';
+      document.getElementById('chat')!.append(div);
+    });
+    await page.waitForTimeout(200);
+    await page.click('[data-a-user="plain_viewer"] .chat-author__display-name');
+    const plainBlock = await waitFor(async () => ((await blockText())?.includes('Owl Smile · сообщений в этом чате') ? await blockText() : null), 3000);
+    check('профиль: у неоформленного — компактная строка с его сообщениями', Boolean(plainBlock?.includes('сообщений в этом чате: 1') && !plainBlock.includes('Пользователь Owl Smile')), plainBlock?.slice(0, 80) ?? '');
+    await page.evaluate(() => {
+      document.querySelector('[data-a-user="plain_viewer"]')!.remove();
+      document.querySelector('.viewer-card-layer')?.remove();
+    });
 
     await page.evaluate(() => {
       const div = document.createElement('div');
@@ -268,6 +363,41 @@ async function main() {
     await page.keyboard.type('x');
     check('дальше можно печатать', (await model()) === 'hi CatJam2 x', JSON.stringify(await model()));
 
+    // 4a. Личные настройки: применяются в открытом чате без перезагрузки
+    const emoteHeight = () => page.$eval('img.owl-emote[alt="CatJam"]', (el) => el.getBoundingClientRect().height).catch(() => 0);
+    await setPrefs(sw, { emoteSize: 40 });
+    check('настройки: размер смайла', Boolean(await waitFor(async () => (await emoteHeight()) === 40, 5000)), `${await emoteHeight()} px`);
+    await setPrefs(sw, { enabled: false });
+    const off = await waitFor(async () => !(await page.$('img.owl-emote, .owl-badges, .owl-paint, #owl-picker-btn')), 5000);
+    check('настройки: выключатель убирает всё', Boolean(off));
+    check('настройки: текст сообщения вернулся', (await page.textContent('[data-a-user="owl_viewer"] .text-fragment')) === 'hi CatJam there');
+    await setPrefs(sw, { enabled: true });
+    check('настройки: включение возвращает смайлы, иконки и кнопку', Boolean(await waitFor(async () =>
+      (await page.$$('img.owl-emote')).length >= 3 && Boolean(await page.$('.owl-badges')) && Boolean(await page.$('#owl-picker-btn')), 5000)));
+    await setPrefs(sw, { hideUsers: ['someone'] });
+    check('настройки: сообщение скрытого зрителя свёрнуто', Boolean(await waitFor(() => page.$('[data-a-user="someone"].owl-collapsed .owl-reveal'), 5000)));
+    await setPrefs(sw, null);
+    check('настройки: сброс', Boolean(await waitFor(async () => !(await page.$('.owl-collapsed')) && (await emoteHeight()) === 28, 5000)));
+
+    const options = await ctx.newPage();
+    await options.goto(`chrome-extension://${extId}/options.html`);
+    check('страница настроек: предпросмотр со смайлом', Boolean(await waitFor(() => options.$('.preview-chat img.owl-emote[alt="CatJam"]'))));
+    await options.click('nav button:has-text("Фильтры")');
+    await options.fill('textarea[aria-label="Скрывать зрителей"]', 'Nightbot');
+    check('страница настроек: предпросмотр сворачивает скрытого', Boolean(await waitFor(() => options.$('.preview-chat [data-a-user="nightbot"].owl-collapsed'), 3000)));
+    const savedHide = await waitFor(async () => {
+      const v = await sw.evaluate(async () =>
+        (await (globalThis as unknown as { chrome: { storage: { sync: SyncArea } } }).chrome.storage.sync.get('owl:p:hideUsers'))['owl:p:hideUsers']);
+      return JSON.stringify(v) === '["nightbot"]' ? 'ok' : null;
+    }, 3000);
+    check('страница настроек: настройка сохранилась', Boolean(savedHide));
+    if (process.env.SHOTS) {
+      await options.setViewportSize({ width: 1100, height: 900 });
+      await options.screenshot({ path: path.join(process.env.SHOTS, 'options.png'), fullPage: true });
+    }
+    await options.close();
+    await setPrefs(sw, null);
+
     // 4b. VK Live (разметка с live.vkvideo.ru, редактор Editor.js — обычный contenteditable)
     await ctx.route('https://live.vkvideo.ru/**', (r) => r.fulfill({ contentType: 'text/html', body: VK_FIXTURE }));
     const vk: Page = await ctx.newPage();
@@ -275,6 +405,25 @@ async function main() {
     check('VK: смайл в сообщении', Boolean(await waitFor(() => vk.$('[data-role="markup"] img.owl-emote[alt="CatJam"]'))));
     check('VK: иконка перед ником', Boolean(await vk.$('[data-role="messageAuthor"] .owl-badges + [class*="ChatMessageAuthorPanel_name_"]')));
     check('VK: эффект на ник с кириллицей', await vk.$eval('[class*="ChatMessageAuthorPanel_name_"]', (el) => el.classList.contains('owl-paint--shimmer')));
+    check('VK: подложка, ник не изменился', await vk.$eval('[class*="ChatMessageAuthorPanel_name_"]', (el) => el.classList.contains('owl-plate') && el.textContent === 'Данил Кузнецов.:'));
+    const vkPlate = await vk.$eval('[class*="ChatMessageAuthorPanel_name_"]', (el) => ({
+      cls: ['owl-plate--pattern', 'owl-plate--pill', 'owl-plate--anim-slide'].every((c) => el.classList.contains(c)),
+      before: getComputedStyle(el, '::before').backgroundImage.startsWith('url("data:image/svg+xml'),
+      anim: getComputedStyle(el, '::before').animationName,
+    }));
+    check('VK: подложка-узор (молнии, шахматка, плашка, плывёт)', vkPlate.cls && vkPlate.before && vkPlate.anim === 'owl-plate-slide', JSON.stringify(vkPlate));
+    await vk.click('[data-message-id="1"] [class*="ChatMessageAuthorPanel_name_"]');
+    const vkCard = await waitFor(() => vk.evaluate(() => {
+      const host = document.querySelector('.owl-card-host');
+      return host ? { inside: host.parentElement?.id === 'chat-pub-root', name: host.shadowRoot!.querySelector('.name')!.textContent } : null;
+    }), 3000);
+    check('VK: карточка профиля, внутри блока ввода, ник без двоеточия', Boolean(vkCard?.inside && vkCard.name === 'Данил Кузнецов.'), JSON.stringify(vkCard));
+    const vkCardText = await vk.evaluate(() => document.querySelector('.owl-card-host')!.shadowRoot!.textContent ?? '');
+    check('VK: в карточке статус, день рождения, «Пользователь Owl Smile», сообщения в чате',
+      ['Смотрю стрим', 'День рождения 15 января', 'Пользователь Owl Smile', 'Сообщений в этом чате: 1'].every((t) => vkCardText.includes(t)), vkCardText.slice(0, 160));
+    if (process.env.SHOTS) await vk.screenshot({ path: path.join(process.env.SHOTS, 'vk-card.png') });
+    await vk.keyboard.press('Escape');
+    check('VK: Esc закрывает карточку', Boolean(await waitFor(async () => !(await vk.$('.owl-card-host')), 2000)));
     await vk.evaluate(() => {
       const tpl = document.querySelector('[data-role="messageContainer"]')!.cloneNode(true) as HTMLElement;
       tpl.querySelectorAll('.owl-badges, img.owl-emote').forEach((n) => n.remove());
@@ -289,6 +438,18 @@ async function main() {
     });
     check('VK: новое сообщение', Boolean(await waitFor(() => vk.$('[data-message-id="2"] img.owl-emote[alt="CatJam2"]'))));
     check('VK: чужой ник без оформления', !(await vk.$('[data-message-id="2"] .owl-badges, [data-message-id="2"] .owl-paint')));
+
+    // Личные настройки на VK: свои размеры, ники с кириллицей и пробелами, своё время у площадки
+    const vkEmoteH = () => vk.$eval('[data-message-id="2"] img.owl-emote', (el) => el.getBoundingClientRect().height).catch(() => 0);
+    check('VK, настройки: размер смайла по умолчанию 32', (await vkEmoteH()) === 32, `${await vkEmoteH()} px`);
+    await setPrefs(sw, { emoteSize: 20, emoteSizeVk: 24, myNicks: { twitch: '', vk: 'Кто-то другой' }, hideUsers: ['Данил Кузнецов.'], timestamps: true });
+    check('VK, настройки: свой размер смайла', Boolean(await waitFor(async () => (await vkEmoteH()) === 24, 5000)), `${await vkEmoteH()} px`);
+    check('VK, настройки: скрытый зритель с кириллицей и точкой', Boolean(await waitFor(() => vk.$('[data-message-id="1"].owl-collapsed'), 5000)));
+    check('VK, настройки: свои сообщения не подсвечиваются', !(await vk.$('[data-message-id="2"].owl-hl')));
+    check('VK, настройки: время не дублирует время VK', !(await vk.$('.owl-time')));
+    check('VK, настройки: Twitch получил свой размер', Boolean(await waitFor(async () => (await emoteHeight()) === 20, 5000)), `${await emoteHeight()} px`);
+    await setPrefs(sw, null);
+    check('VK, настройки: сброс', Boolean(await waitFor(async () => !(await vk.$('.owl-collapsed')) && (await vkEmoteH()) === 32, 5000)));
     check('VK: кнопка смайлов рядом с их смайлами', Boolean(await waitFor(() => vk.$('#owl-picker-btn + [class*="Publisher_smileContainer_"]'))));
     await vk.click('#owl-picker-btn');
     check('VK: «Недавние» помнят смайл из Twitch', Boolean(await vk.$('text=Недавние')));
@@ -326,6 +487,19 @@ async function main() {
     check('VK, ответ: выбор смайла в окне не отменил ответ', await vk.evaluate(() => (window as unknown as { __vkReply: boolean }).__vkReply === true));
     await vk.click('#owl-picker-btn');
     check('VK: окно смайлов — внутри блока ввода', await vk.evaluate(() => document.querySelector('.owl-picker-host')?.parentElement?.id === 'chat-pub-root'));
+    // Плеер VK с большим z-index поверх всего (жалоба 14.11.2026: он перекрывал окно смайлов)
+    const onTop = await vk.evaluate(() => {
+      const player = document.createElement('div');
+      player.id = 'fake-player';
+      player.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000c';
+      document.body.append(player);
+      const host = document.querySelector<HTMLElement>('.owl-picker-host')!;
+      const r = host.shadowRoot!.querySelector('.panel')!.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      player.remove();
+      return { popover: host.matches(':popover-open'), topIsPicker: top === host };
+    });
+    check('VK: окно смайлов в верхнем слое, поверх плеера', onTop.popover && onTop.topIsPicker, JSON.stringify(onTop));
     await vk.locator('.panel input').fill('Cat');
     await vk.locator('.panel input').press('Escape');
     check('VK, ответ: поиск и Esc в окне не трогают ответ', await vk.evaluate(() => (window as unknown as { __vkReply: boolean }).__vkReply === true) && (await vkText()).startsWith('@Леся привет'), JSON.stringify(await vkText()));
@@ -368,6 +542,47 @@ async function main() {
     });
     check('BTTV: смайлы канала и глобальные в сообщении Twitch', Boolean(bttvImgs?.[0]?.src.includes(bttvId(777)) && bttvImgs?.[1]?.src.includes(bttvId(103)) && bttvImgs?.[0]?.srcset?.includes('2x.webp 2x')), JSON.stringify(bttvImgs?.map((i) => i.alt)));
     check('BTTV: при совпадении кода побеждает Owl Smile', Boolean(bttvImgs?.[2]?.src.startsWith('data:')), bttvImgs?.[2]?.src.slice(0, 30));
+
+    // Подсказка при наведении: код, откуда смайл, кто загрузил — в верхнем слое.
+    // Поддельная карточка Twitch (клики по никам в шагах выше) закрыта — как закрыл бы её Twitch
+    await page.evaluate(() => document.querySelectorAll('.viewer-card-layer').forEach((n) => n.remove()));
+    const tipFor = async (alt: string) => {
+      await page.mouse.move(0, 0);
+      await page.hover(`[data-a-user="bttvfan"] img.owl-emote[alt="${alt}"]`);
+      return waitFor(() => page.evaluate(() => {
+        const host = document.querySelector('.owl-tip-host');
+        const r = host?.shadowRoot;
+        if (!r) return null;
+        return {
+          top: host!.matches(':popover-open'),
+          code: r.querySelector('.code')?.textContent, src: r.querySelector('.src')?.textContent, author: r.querySelector('.author')?.textContent ?? null,
+        };
+      }), 3000);
+    };
+    const owlTip = await tipFor('CatJam');
+    check('подсказка смайла Owl: код, «🦉 Owl Smile», кто загрузил и когда',
+      owlTip?.code === 'CatJam' && owlTip.src === '🦉 Owl Smile' && owlTip.author === 'Загрузил(а): seed, 12.11.2026' && owlTip.top, JSON.stringify(owlTip));
+    const chanTip = await tipFor('ChanEmote');
+    check('подсказка смайла BetterTTV канала: источник и автор (канал)',
+      chanTip?.src === 'BetterTTV · канал SomeChannel' && chanTip.author === 'Автор: SomeChannel', JSON.stringify(chanTip));
+    const globTip = await tipFor('Glob3');
+    check('подсказка глобального смайла BetterTTV', globTip?.src === 'BetterTTV · глобальный', JSON.stringify(globTip));
+    await page.mouse.move(0, 0);
+    await page.hover('[data-a-user="bttvfan"] img.owl-emote[alt="CatJam"]');
+    await waitFor(() => page.$('.owl-tip-host'), 2000);
+    for (let i = 0; i < 3; i++) {
+      await addTwitchMessage(`flood${i}`, 'новое сообщение');
+      await page.evaluate(() => document.dispatchEvent(new Event('scroll')));
+    }
+    await page.waitForTimeout(300);
+    check('подсказка не исчезает от новых сообщений в чате', Boolean(await page.$('.owl-tip-host')));
+    await page.mouse.move(0, 0);
+    check('подсказка исчезает, когда мышь ушла', Boolean(await waitFor(async () => !(await page.$('.owl-tip-host')), 2000)));
+    if (process.env.SHOTS) {
+      await page.hover('[data-a-user="bttvfan"] img.owl-emote[alt="CatJam"]');
+      await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-tip.png') });
+      await page.mouse.move(0, 0);
+    }
     const drawn = await waitFor(() => page.$eval('[data-a-user="bttvfan"] img.owl-emote[alt="ChanEmote"]', (e) => (e as HTMLImageElement).complete && (e as HTMLImageElement).naturalWidth > 0));
     check('BTTV: картинка смайла загрузилась и нарисована', Boolean(drawn));
     const hitsBeforePicker = imageHits + bttvServer.imageHits();
@@ -516,6 +731,37 @@ async function main() {
     const badgeInfo = (await manage.textContent('.preview-row')) ?? '';
     const warn = (await manage.textContent('.upload')) ?? '';
     check('иконка 600×400 → 72×48 + предупреждение', badgeInfo.includes('600×400 → 72×48') && warn.includes('не квадратная'), badgeInfo.match(/\d+×\d+ → \d+×\d+/)?.[0]);
+    await manage.click('nav button:has-text("Смайлы")');
+
+    // 6c. Профиль через страницу загрузки: подложка и поля одной записью, незнакомое поле сохраняется
+    await manage.click('nav button:has-text("Зрители")');
+    await manage.locator('.list-row', { hasText: 'owl_viewer' }).locator('button:has-text("Изменить")').click();
+    await manage.fill('.profile-fields textarea', 'Обновлённое «о себе»');
+    await manage.click('button:has-text("Сохранить")');
+    await waitFor(async () => (await manage.textContent('.status'))?.startsWith('Готово') ?? false, 30000);
+    const savedProfile = JSON.parse(server.show('profiles/twitch/owl_viewer.json').toString());
+    check('профиль сохранён через страницу загрузки', savedProfile.about === 'Обновлённое «о себе»' && savedProfile.nameplate === 'stars' && savedProfile.future === 'поле будущей версии',
+      JSON.stringify({ about: savedProfile.about, nameplate: savedProfile.nameplate, future: savedProfile.future }));
+    if (process.env.SHOTS) await manage.screenshot({ path: path.join(process.env.SHOTS, 'manage-profile.png'), fullPage: true });
+    await manage.click('nav button:has-text("Смайлы")');
+
+    // 6d. Конструктор подложек: узор с шахматкой, потом «Изменить» → рамка
+    await manage.click('nav button:has-text("Подложки")');
+    await manage.click('.pattern-tile[title="Волны"]');
+    await manage.check('.alt-layer input[type=checkbox]');
+    await manage.click('.alt-layer button:has-text("Шахматка")');
+    await manage.fill('input[placeholder="neon-bolts"]', 'neon-waves');
+    await manage.fill('input[placeholder="Неоновые молнии"]', 'Неоновые волны');
+    if (process.env.SHOTS) await manage.screenshot({ path: path.join(process.env.SHOTS, 'manage-nameplates.png'), fullPage: true });
+    await manage.click('button:has-text("Создать подложку")');
+    await waitFor(async () => (await manage.textContent('.status'))?.includes('Добавлена подложка neon-waves') && !(await manage.textContent('.status'))!.endsWith('…'), 30000);
+    const created = JSON.parse(server.show('nameplates/neon-waves.json').toString());
+    check('конструктор: подложка-узор с шахматкой', created.kind === 'pattern' && created.pattern === 'waves' && created.alt?.checker === true, JSON.stringify(created));
+    await manage.locator('.list-row', { hasText: 'neon-waves' }).locator('button:has-text("Изменить")').click();
+    await manage.click('.plate-editor button:has-text("Рамка")');
+    await manage.click('button:has-text("Сохранить изменения")');
+    await waitFor(async () => (await manage.textContent('.status'))?.includes('Изменена подложка neon-waves') && !(await manage.textContent('.status'))!.endsWith('…'), 30000);
+    check('конструктор: «Изменить» перезаписывает', JSON.parse(server.show('nameplates/neon-waves.json').toString()).shape === 'frame');
     await manage.click('nav button:has-text("Смайлы")');
 
     // 7. Отказ от не-картинки

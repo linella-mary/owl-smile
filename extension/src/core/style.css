@@ -1,8 +1,8 @@
 /* Смайлы */
 img.owl-emote {
-  height: 28px;
+  height: var(--owl-emote-h, 28px);
   width: auto;
-  max-width: 112px;
+  max-width: calc(var(--owl-emote-h, 28px) * 4);
   vertical-align: middle;
   margin: -4px 1px;
   display: inline-block;
@@ -16,9 +16,14 @@ img.owl-emote {
   vertical-align: middle;
   margin-right: 3px;
 }
+.owl-badges .owl-bday {
+  font-size: calc(var(--owl-badge-size, 18px) * 0.9);
+  line-height: 1;
+  vertical-align: middle;
+}
 img.owl-badge {
-  width: 18px;
-  height: 18px;
+  width: var(--owl-badge-size, 18px);
+  height: var(--owl-badge-size, 18px);
   vertical-align: middle;
   object-fit: contain;
 }
@@ -30,7 +35,8 @@ img.owl-badge {
  * Класс owl-vk ставит startOwl на <html>.
  */
 .owl-vk img.owl-emote {
-  height: 32px;
+  height: var(--owl-emote-h, 32px);
+  max-width: calc(var(--owl-emote-h, 32px) * 4);
   margin: 0 1px;
   vertical-align: middle;
 }
@@ -49,8 +55,8 @@ img.owl-badge {
   margin-right: 4px;
 }
 .owl-vk img.owl-badge {
-  width: 20px;
-  height: 20px;
+  width: var(--owl-badge-size, 20px);
+  height: var(--owl-badge-size, 20px);
   display: block;
 }
 
@@ -105,4 +111,151 @@ img.owl-badge {
 
 @media (prefers-reduced-motion: reduce) {
   .owl-paint { animation: none !important; }
+}
+.owl-no-paint-anim .owl-paint { animation: none !important; }
+
+/*
+ * Личные настройки вида (core/apply-settings.ts ставит классы и переменные на <html>).
+ * Сообщения, которые обработал Owl Smile, помечены [data-owl] — так правила не зависят от вёрстки площадки.
+ */
+.owl-font [data-owl],
+.owl-font [data-owl] *:not(img, .owl-badges, .owl-time) {
+  font-size: var(--owl-font-size) !important;
+}
+.owl-lh [data-owl],
+.owl-lh [data-owl] *:not(img, .owl-badges) {
+  line-height: var(--owl-line-height) !important;
+}
+.owl-zebra [data-owl][data-owl-z="1"] {
+  background-color: rgba(128, 128, 128, 0.09);
+}
+.owl-sep [data-owl] {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+}
+[data-owl].owl-hl {
+  background-color: color-mix(in srgb, var(--owl-hl-color, #9147ff) 22%, transparent) !important;
+  box-shadow: inset 3px 0 0 var(--owl-hl-color, #9147ff);
+}
+
+/* Время сообщения: вставляется всегда, видно — только с настройкой */
+.owl-time {
+  display: none;
+  margin-right: 5px;
+  font-size: 0.85em;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.owl-ts .owl-time { display: inline; }
+
+/* Скрытые сообщения: целиком или свёрнутые в строку «показать» */
+[data-owl].owl-hidden { display: none !important; }
+[data-owl].owl-collapsed > :not(.owl-reveal) { display: none !important; }
+button.owl-reveal {
+  all: unset;
+  display: block;
+  cursor: pointer;
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.55;
+  padding: 2px 0;
+}
+button.owl-reveal:hover { opacity: 0.9; text-decoration: underline; }
+
+/*
+ * Подложка под ник (core/paint.ts applyNameplate): ::before под текстом ника.
+ * Слой (isolation) — на родителе ника, а не на самом нике: иначе фон ника с градиентным текстом эффекта
+ * (background-clip: text) оказался бы под подложкой.
+ */
+.owl-plate-ctx { isolation: isolate; }
+.owl-plate {
+  position: relative;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.owl-plate::before {
+  content: '';
+  position: absolute;
+  inset: -1px 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--owl-plate) center / cover no-repeat;
+  opacity: var(--owl-plate-opacity, 0.6);
+  pointer-events: none;
+}
+.owl-plate--emoji::before {
+  background-size: auto 100%;
+  background-repeat: repeat-x;
+  background-position: left center;
+}
+
+/*
+ * Узоры и символы (kind: pattern / symbols). Слои: плитка узора (повторяется) и необязательная
+ * подкраска --owl-plate-c2. Свечение — drop-shadow цветом узора, у рамки — ещё box-shadow.
+ */
+.owl-plate--pattern::before {
+  background-image: var(--owl-plate);
+  background-size: var(--owl-plate-tile-w) var(--owl-plate-tile-h), 100% 100%;
+  background-repeat: repeat, no-repeat;
+  background-position: 0 50%, 0 0;
+  filter: drop-shadow(0 0 0.6px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 var(--owl-plate-glow, 0px) var(--owl-plate-c1));
+}
+.owl-plate--pill { padding: 0 7px; border-radius: 999px; }
+.owl-plate--pill::before { inset: -2px 0; }
+.owl-plate--underline { padding: 0 2px; }
+.owl-plate--underline::before {
+  inset: auto 0 -3px 0;
+  height: 5px;
+  border-radius: 3px;
+  background-size: auto 100%, 100% 100%;
+}
+.owl-plate--frame::before {
+  inset: -2px -1px;
+  border: 1px solid var(--owl-plate-c1);
+  box-shadow: 0 0 var(--owl-plate-glow, 0px) var(--owl-plate-c1), inset 0 0 var(--owl-plate-glow, 0px) var(--owl-plate-c1);
+  filter: none;
+}
+.owl-plate--fade::before,
+.owl-plate--fade::after {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+
+/* Анимации подложек */
+.owl-plate--anim-slide::before { animation: owl-plate-slide var(--owl-plate-speed, 4s) linear infinite; }
+@keyframes owl-plate-slide {
+  to { background-position: var(--owl-plate-tile-w) 50%, 0 0; }
+}
+.owl-plate--anim-pulse::before { animation: owl-plate-pulse var(--owl-plate-speed, 4s) ease-in-out infinite; }
+@keyframes owl-plate-pulse {
+  50% { opacity: calc(var(--owl-plate-opacity, 0.75) * 0.4); }
+}
+.owl-plate--anim-flicker::before { animation: owl-plate-flicker var(--owl-plate-speed, 4s) steps(1) infinite; }
+@keyframes owl-plate-flicker {
+  0%, 40%, 48%, 70%, 100% { opacity: var(--owl-plate-opacity, 0.75); }
+  44% { opacity: 0.15; }
+  74% { opacity: 0.35; }
+}
+/* Блик пробегает по подложке: отдельный слой ::after */
+.owl-plate--anim-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: -1px 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--owl-plate-c1) 45%, #fff) 50%, transparent 65%);
+  background-size: 250% 100%;
+  opacity: 0.55;
+  pointer-events: none;
+  animation: owl-plate-shimmer var(--owl-plate-speed, 4s) linear infinite;
+}
+.owl-plate--underline.owl-plate--anim-shimmer::after { inset: auto 0 -3px 0; height: 5px; }
+@keyframes owl-plate-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -100% 0; }
+}
+.owl-no-paint-anim .owl-plate::before,
+.owl-no-paint-anim .owl-plate::after { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .owl-plate::before, .owl-plate::after { animation: none !important; }
 }

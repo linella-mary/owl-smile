@@ -16,7 +16,8 @@
     "seed": "tsx scripts/seed.ts",
     "check:live": "tsx scripts/check-live.ts",
     "release": "tsx scripts/release.ts",
-    "check:release-api": "tsx scripts/check-release-api.ts"
+    "check:release-api": "tsx scripts/check-release-api.ts",
+    "measure:git": "tsx scripts/measure-git-growth.ts"
   },
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.10.5",

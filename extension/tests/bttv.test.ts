@@ -238,3 +238,17 @@ describe('смайлы BetterTTV во вкладке чата', () => {
     expect(img.getAttribute('srcset')).toBe(`https://cdn.betterttv.net/emote/${id(1)}/1x.webp 1x, https://cdn.betterttv.net/emote/${id(1)}/2x.webp 2x`);
   });
 });
+
+describe('автор смайла BetterTTV', () => {
+  it('берётся из user (displayName, иначе name); мусор отбрасывается', async () => {
+    const { parseEmotes } = await import('../src/shared/bttv');
+    const id = (n: number) => n.toString(16).padStart(24, '0');
+    const list = parseEmotes([
+      { id: id(1), code: 'A', user: { displayName: 'Forsen', name: 'forsen' } },
+      { id: id(2), code: 'B', user: { name: 'xqc' } },
+      { id: id(3), code: 'C', user: { displayName: 'bad\u0000name' } },
+      { id: id(4), code: 'D' },
+    ]);
+    expect(list.map((e) => e.by)).toEqual(['Forsen', 'xqc', undefined, undefined]);
+  });
+});

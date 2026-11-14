@@ -1,13 +1,16 @@
 import { browser } from 'wxt/browser';
 import type { ChatAdapter } from '../platforms/types';
 import type { OwlMessage } from '../shared/messages';
+import { isActive, type Settings } from '../shared/settings';
 import type { RenderData } from './renderer';
+import { mountOnTop, supportsTopLayer } from './top-layer';
 
 const BTN_ID = 'owl-picker-btn';
 const K_RECENT = 'owl:recent';
 const K_RECENT_BTTV = 'owl:recent-bttv';
 const K_TAB = 'owl:picker-tab';
-const MAX_RECENT = 16;
+/** Сколько недавних хранить; показывается столько, сколько задано в настройках (recentCount). */
+const MAX_RECENT = 32;
 
 type Tab = 'owl' | 'bttv';
 
@@ -185,6 +188,7 @@ const PANEL_CSS = `
   font: 13px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 .tabs { display: flex; border-bottom: 1px solid #3a3a3d; }
+.tabs[hidden] { display: none; }
 .tabs button { flex: 1; background: none; color: #adadb8; border: 0; border-bottom: 2px solid transparent; padding: 8px 6px 6px; font: inherit; font-weight: 600; cursor: pointer; }
 .tabs button:hover { color: #efeff1; }
 .tabs button[aria-selected="true"] { color: #efeff1; border-bottom-color: #9147ff; }
@@ -195,9 +199,9 @@ button.add { background: #9147ff; color: #fff; border: 0; border-radius: 6px; wi
 .body { overflow-y: auto; padding: 6px 8px 8px; }
 .label { color: #adadb8; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin: 6px 0 4px; }
 .grid { display: flex; flex-wrap: wrap; gap: 2px; }
-.grid button { background: none; border: 0; border-radius: 4px; padding: 3px; cursor: pointer; height: 38px; min-width: 38px; display: flex; align-items: center; justify-content: center; }
+.grid button { background: none; border: 0; border-radius: 4px; padding: 3px; cursor: pointer; height: calc(var(--pick, 28px) + 10px); min-width: calc(var(--pick, 28px) + 10px); display: flex; align-items: center; justify-content: center; }
 .grid button:hover, .grid button:focus-visible { background: #ffffff1f; outline: none; }
-.grid img { height: 28px; max-width: 100px; }
+.grid img { height: var(--pick, 28px); max-width: calc(var(--pick, 28px) * 3.5); }
 .empty { color: #adadb8; padding: 12px 4px; text-align: center; }
 .note { color: #adadb8; font-size: 12px; padding: 2px 2px 6px; }
 .note.err { color: #ff8a8a; }
@@ -212,10 +216,16 @@ export class EmotePicker {
   constructor(
     private readonly adapter: ChatAdapter,
     private readonly getData: () => RenderData,
+    private readonly getSettings: () => Settings,
   ) {}
 
-  /** Вызывать при изменениях DOM: ставит кнопку, если её ещё нет. */
+  /** Вызывать при изменениях DOM и настроек: ставит кнопку, если её ещё нет (или убирает, если выключена). */
   ensureButton(): void {
+    const s = this.getSettings();
+    if (!isActive(s, this.adapter.platform) || !s.pickerButton) {
+      this.dispose();
+      return;
+    }
     if (document.getElementById(BTN_ID)) return;
     const anchor = this.adapter.getPickerAnchor();
     if (!anchor) return;
@@ -271,9 +281,11 @@ export class EmotePicker {
   };
 
   private async open(btn: HTMLElement): Promise<void> {
-    const saved = (await browser.storage.local.get(K_TAB))[K_TAB];
-    let tab: Tab = saved === 'bttv' ? 'bttv' : 'owl';
-    const recent: Record<Tab, string[]> = { owl: await getRecent('owl'), bttv: await getRecent('bttv') };
+    const s = this.getSettings();
+    const saved = s.defaultTab === 'last' ? (await browser.storage.local.get(K_TAB))[K_TAB] : s.defaultTab;
+    let tab: Tab = saved === 'bttv' && s.bttvEmotes ? 'bttv' : 'owl';
+    const shown = (list: string[]) => list.slice(0, s.recentCount);
+    const recent: Record<Tab, string[]> = { owl: shown(await getRecent('owl')), bttv: shown(await getRecent('bttv')) };
     this.host = document.createElement('div');
     this.host.className = 'owl-picker-host';
     // События окна до площадки не доходят: её обработчики «клик мимо», горячие клавиши, Enter и Esc
@@ -285,12 +297,18 @@ export class EmotePicker {
     style.textContent = PANEL_CSS;
     const panel = document.createElement('div');
     panel.className = 'panel';
+    panel.style.setProperty('--pick', `${s.pickerEmoteSize}px`);
     panel.innerHTML =
       `<div class="tabs" role="tablist"><button role="tab" data-tab="owl">🦉 Owl Smile</button><button role="tab" data-tab="bttv">BetterTTV</button></div>` +
       `<div class="head"><input type="search" placeholder="Поиск смайла"><button class="add" title="Загрузить свой смайл">+</button></div><div class="body"></div>`;
     this.root.append(style, panel);
+    // Смайлы BetterTTV выключены в настройках — вкладки не нужны
+    if (!s.bttvEmotes) panel.querySelector<HTMLElement>('.tabs')!.hidden = true;
+    // Верхний слой: поверх плеера и любых z-index площадки, а в DOM — внутри блока ввода (см. top-layer.ts).
+    // Без Popover API — как раньше: внутрь блока, если он не ломает position: fixed, иначе в body.
     const container = this.adapter.getPickerContainer?.();
-    (container && !trapsFixed(container) ? container : document.body).append(this.host);
+    const parent = container && (supportsTopLayer() || !trapsFixed(container)) ? container : document.body;
+    mountOnTop(this.host, parent);
 
     // Открываем над кнопкой (как обычно у поля чата), а если сверху тесно — под ней.
     const r = btn.getBoundingClientRect();
@@ -429,7 +447,7 @@ export class EmotePicker {
  * Автодополнение кода смайла по Tab (повторный Tab — следующий вариант).
  * Срабатывает, только если есть подходящие смайлы; иначе Tab обрабатывает сама площадка.
  */
-export function installTabCompletion(adapter: ChatAdapter, getData: () => RenderData): () => void {
+export function installTabCompletion(adapter: ChatAdapter, getData: () => RenderData, getSettings: () => Settings): () => void {
   let cycle: { options: string[]; i: number; inserted: string; lead: boolean } | null = null;
 
   const onKey = (e: KeyboardEvent) => {
@@ -437,6 +455,8 @@ export function installTabCompletion(adapter: ChatAdapter, getData: () => Render
         if (e.key !== 'Shift') cycle = null;
         return;
       }
+      const s = getSettings();
+      if (!isActive(s, adapter.platform) || !s.tabCompletion) return;
       const input = adapter.getChatInput();
       if (!input || !input.contains(e.target as Node)) return;
       // Слово — как и раньше, всё до пробела: «@ник» и «:смайл» дополняет сама площадка, их не трогаем.

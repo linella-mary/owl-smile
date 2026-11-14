@@ -109,6 +109,34 @@ describe('DataRepo', () => {
     expect(server.log().length).toBe(before);
   });
 
+  it('синхронизация скачивает только новое; пересборка убирает удалённое', async () => {
+    const writer = repo();
+    const syncer = repo();
+    await syncer.fetchLatest();
+    const start = (await syncer.storageUsage()).bytes;
+    const big = (i: number) => new Uint8Array(40 * 1024).map((_, j) => (j * 31 + i * 7919) % 251);
+    for (let i = 0; i < 5; i++) {
+      await writer.commitAndPush(() => new Map([[`junk/${i}.bin`, big(i)]]), `junk ${i}`, 't');
+      await syncer.fetchLatest();
+    }
+    // Раньше каждая синхронизация скачивала репозиторий целиком (5 × растущий объём)
+    const grown = (await syncer.storageUsage()).bytes - start;
+    expect(grown).toBeLessThan(5 * 40 * 1024 * 1.5);
+    // Свой коммит копия загрузки обратно не скачивает
+    expect((await writer.storageUsage()).bytes).toBeLessThan(5 * 40 * 1024 * 1.5 + start * 2);
+
+    await writer.commitAndPush(() => new Map([0, 1, 2, 3, 4].map((i) => [`junk/${i}.bin`, null])), 'clean', 't');
+    await syncer.fetchLatest();
+    expect(await syncer.compactIfBloated(true)).toBe(true);
+    const after = await syncer.storageUsage();
+    expect(after.packs).toBe(1);
+    expect(after.bytes).toBeLessThan(start + 20 * 1024);
+    // Копия после пересборки рабочая
+    const snap = await syncer.readSnapshot(await syncer.fetchLatest());
+    expect(snap.emotes.CatJam?.code).toBe('CatJam');
+    expect(await syncer.compactIfBloated()).toBe(false);
+  }, 30_000);
+
   it('без токена запись запрещена', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'owl-client-'));
     dirs.push(dir);

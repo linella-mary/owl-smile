@@ -50,3 +50,26 @@ input[type='color'] { width: 40px; height: 32px; padding: 2px; }
 .status.err { border-color: var(--err); color: var(--err); }
 .notice { border-color: #ffb74d; }
 @media (max-width: 560px) { .drop { width: 100%; } }
+.emoji-drop { cursor: default; }
+.emoji-big { font-size: 40px; letter-spacing: 4px; word-break: break-all; text-align: center; }
+.profile-box { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.profile-box summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.profile-box[open] summary { margin-bottom: 10px; }
+.profile-fields textarea { width: 100%; resize: vertical; background: #0e0e10; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit; }
+.link-title { width: 140px; }
+input.invalid { border-color: var(--err); }
+.fav-img { height: 20px; max-width: 60px; object-fit: contain; }
+.fav-search { width: 160px; padding: 4px 8px; }
+textarea.badge-desc { width: 100%; resize: vertical; background: #0e0e10; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 13px; }
+.badge-desc-text { white-space: pre-line; word-break: break-word; color: var(--muted); }
+.pattern-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.pattern-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; }
+.pattern-tile.active { border-color: var(--accent); background: #9147ff2e; }
+.symbols-input { font-size: 18px; letter-spacing: 2px; }
+button.mono { font-family: 'Segoe UI Symbol', ui-monospace, monospace; min-width: 32px; }
+.palette button { padding: 3px 6px; }
+.plate-controls input[type='range'] { width: 100%; }
+.plate-preview { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.alt-layer { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; }
+.chat-sample.light { background: #f7f7f8; color: #0e0e10; }
+.chat-sample.light .painted { color: #772ce8; }
