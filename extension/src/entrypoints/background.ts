@@ -1,7 +1,17 @@
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
+import { createBttvSync } from '../shared/bttv';
 import type { OwlMessage } from '../shared/messages';
 import { sync } from '../sync';
+
+const bttv = createBttvSync({
+  store: {
+    get: (keys) => browser.storage.local.get(keys),
+    set: (items) => browser.storage.local.set(items),
+    remove: (keys) => browser.storage.local.remove(keys),
+  },
+  fetch: (...args) => fetch(...args),
+});
 
 const ALARM = 'owl-sync';
 const PERIOD_MIN = 15;
@@ -26,9 +36,13 @@ async function injectIntoOpenTabs(): Promise<void> {
 
 export default defineBackground(() => {
   // При запуске браузера и установке/обновлении расширения — синхронизация.
-  browser.runtime.onStartup.addListener(() => void sync());
+  browser.runtime.onStartup.addListener(() => {
+    void sync();
+    void bttv.refreshAll();
+  });
   browser.runtime.onInstalled.addListener(({ reason }) => {
     void sync(true);
+    void bttv.refreshAll();
     // После установки/обновления в уже открытых вкладках нашего скрипта нет (или он «осиротел») —
     // ставим сами, чтобы не нужно было обновлять страницу.
     if (reason === 'install' || reason === 'update') void injectIntoOpenTabs();
@@ -39,12 +53,24 @@ export default defineBackground(() => {
     if (!a) void browser.alarms.create(ALARM, { periodInMinutes: PERIOD_MIN, delayInMinutes: PERIOD_MIN });
   });
   browser.alarms.onAlarm.addListener((a) => {
-    if (a.name === ALARM) void sync();
+    if (a.name !== ALARM) return;
+    void sync();
+    void bttv.refreshAll();
   });
 
   browser.runtime.onMessage.addListener((msg: OwlMessage, _sender, sendResponse) => {
     if (msg?.type === 'owl:sync') {
       void sync(msg.force ?? true).then(sendResponse);
+      return true;
+    }
+    if (msg?.type === 'owl:bttv') {
+      // Ответ не ждут: вкладка узнает о новых смайлах из storage.onChanged
+      void bttv.refreshGlobal();
+      if (msg.login) void bttv.refreshChannel(msg.login);
+      return undefined;
+    }
+    if (msg?.type === 'owl:bttv-setting') {
+      void bttv.setSettingChannel(msg.value).then(sendResponse);
       return true;
     }
     if (msg?.type === 'owl:open-manage') {

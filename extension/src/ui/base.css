@@ -14,6 +14,10 @@
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; }
 body.popup { width: 300px; padding: 14px; }
 h1 { font-size: 16px; margin: 0 0 10px; }
+h2 { font-size: 14px; margin: 0; }
+.bttv { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 14px; }
+.bttv .row input { flex: 1; min-width: 0; }
+.bttv label { display: block; }
 button {
   background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 12px;
   font: inherit; font-weight: 600; cursor: pointer;

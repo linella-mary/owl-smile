@@ -5,7 +5,11 @@ import type { RenderData } from './renderer';
 
 const BTN_ID = 'owl-picker-btn';
 const K_RECENT = 'owl:recent';
+const K_RECENT_BTTV = 'owl:recent-bttv';
+const K_TAB = 'owl:picker-tab';
 const MAX_RECENT = 16;
+
+type Tab = 'owl' | 'bttv';
 
 /**
  * Отправляет редактору событие beforeinput. true — редактор обработал его сам (preventDefault).
@@ -137,12 +141,15 @@ export function typedBeforeCaret(input: HTMLElement): { before: string; chip: bo
   return { before: r.toString().replace(/\u00a0/g, ' '), chip: false };
 }
 
-async function getRecent(): Promise<string[]> {
-  return ((await browser.storage.local.get(K_RECENT))[K_RECENT] as string[] | undefined) ?? [];
+const recentKey = (tab: Tab) => (tab === 'bttv' ? K_RECENT_BTTV : K_RECENT);
+
+async function getRecent(tab: Tab): Promise<string[]> {
+  const key = recentKey(tab);
+  return ((await browser.storage.local.get(key))[key] as string[] | undefined) ?? [];
 }
-async function pushRecent(code: string): Promise<void> {
-  const list = [code, ...(await getRecent()).filter((c) => c !== code)].slice(0, MAX_RECENT);
-  await browser.storage.local.set({ [K_RECENT]: list });
+async function pushRecent(tab: Tab, code: string): Promise<void> {
+  const list = [code, ...(await getRecent(tab)).filter((c) => c !== code)].slice(0, MAX_RECENT);
+  await browser.storage.local.set({ [recentKey(tab)]: list });
 }
 
 const PANEL_CSS = `
@@ -152,6 +159,10 @@ const PANEL_CSS = `
   background: #18181b; color: #efeff1; border: 1px solid #3a3a3d; border-radius: 8px; box-shadow: 0 8px 24px #000a;
   font: 13px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
+.tabs { display: flex; border-bottom: 1px solid #3a3a3d; }
+.tabs button { flex: 1; background: none; color: #adadb8; border: 0; border-bottom: 2px solid transparent; padding: 8px 6px 6px; font: inherit; font-weight: 600; cursor: pointer; }
+.tabs button:hover { color: #efeff1; }
+.tabs button[aria-selected="true"] { color: #efeff1; border-bottom-color: #9147ff; }
 .head { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid #3a3a3d; }
 input { flex: 1; background: #0e0e10; color: inherit; border: 1px solid #3a3a3d; border-radius: 6px; padding: 6px 8px; font: inherit; outline: none; }
 input:focus { border-color: #9147ff; }
@@ -163,12 +174,15 @@ button.add { background: #9147ff; color: #fff; border: 0; border-radius: 6px; wi
 .grid button:hover, .grid button:focus-visible { background: #ffffff1f; outline: none; }
 .grid img { height: 28px; max-width: 100px; }
 .empty { color: #adadb8; padding: 12px 4px; text-align: center; }
+.note { color: #adadb8; font-size: 12px; padding: 2px 2px 6px; }
+.note.err { color: #ff8a8a; }
 `;
 
 /** Кнопка смайлов возле поля ввода + всплывающая сетка (Shadow DOM, стили площадки не влияют). */
 export class EmotePicker {
   private host: HTMLElement | null = null;
   private root: ShadowRoot | null = null;
+  private redraw: (() => void) | null = null;
 
   constructor(
     private readonly adapter: ChatAdapter,
@@ -211,9 +225,15 @@ export class EmotePicker {
     document.getElementById(BTN_ID)?.remove();
   }
 
+  /** Данные обновились (например, догрузились смайлы канала) — перерисовать открытое окно. */
+  refresh(): void {
+    this.redraw?.();
+  }
+
   close(): void {
     this.host?.remove();
     this.host = this.root = null;
+    this.redraw = null;
     document.removeEventListener('pointerdown', this.onOutside, true);
     document.removeEventListener('keydown', this.onKey, true);
   }
@@ -226,14 +246,18 @@ export class EmotePicker {
   };
 
   private async open(btn: HTMLElement): Promise<void> {
-    const recent = await getRecent();
+    const saved = (await browser.storage.local.get(K_TAB))[K_TAB];
+    let tab: Tab = saved === 'bttv' ? 'bttv' : 'owl';
+    const recent: Record<Tab, string[]> = { owl: await getRecent('owl'), bttv: await getRecent('bttv') };
     this.host = document.createElement('div');
     this.root = this.host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = PANEL_CSS;
     const panel = document.createElement('div');
     panel.className = 'panel';
-    panel.innerHTML = `<div class="head"><input type="search" placeholder="Поиск смайла"><button class="add" title="Загрузить свой смайл">+</button></div><div class="body"></div>`;
+    panel.innerHTML =
+      `<div class="tabs" role="tablist"><button role="tab" data-tab="owl">🦉 Owl Smile</button><button role="tab" data-tab="bttv">BetterTTV</button></div>` +
+      `<div class="head"><input type="search" placeholder="Поиск смайла"><button class="add" title="Загрузить свой смайл">+</button></div><div class="body"></div>`;
     this.root.append(style, panel);
     document.body.append(this.host);
 
@@ -252,21 +276,49 @@ export class EmotePicker {
 
     const input = panel.querySelector('input')!;
     const body = panel.querySelector<HTMLElement>('.body')!;
-    panel.querySelector('.add')!.addEventListener('click', () => {
+    const add = panel.querySelector<HTMLElement>('.add')!;
+    add.addEventListener('click', () => {
       void browser.runtime.sendMessage({ type: 'owl:open-manage' } satisfies OwlMessage);
       this.close();
     });
-    const draw = () => this.renderGrid(body, input.value.trim().toLowerCase(), recent);
+    const tabs = [...panel.querySelectorAll<HTMLButtonElement>('.tabs button')];
+    const draw = () => {
+      for (const t of tabs) t.setAttribute('aria-selected', String(t.dataset.tab === tab));
+      add.hidden = tab !== 'owl'; // загрузить можно только в базу Owl Smile
+      this.renderGrid(body, tab, input.value.trim().toLowerCase(), recent[tab]);
+    };
+    for (const t of tabs) {
+      t.addEventListener('click', () => {
+        tab = t.dataset.tab === 'bttv' ? 'bttv' : 'owl';
+        void browser.storage.local.set({ [K_TAB]: tab });
+        body.scrollTop = 0;
+        draw();
+        input.focus();
+      });
+    }
     input.addEventListener('input', draw);
+    this.redraw = draw;
     draw();
     input.focus();
     document.addEventListener('pointerdown', this.onOutside, true);
     document.addEventListener('keydown', this.onKey, true);
   }
 
-  private renderGrid(body: HTMLElement, q: string, recent: string[]): void {
-    const { emotes } = this.getData();
+  private renderGrid(body: HTMLElement, tab: Tab, q: string, recent: string[]): void {
+    const { emotes, bttv } = this.getData();
     body.replaceChildren();
+    const note = (text: string, error = false) => {
+      const div = document.createElement('div');
+      div.className = error ? 'note err' : 'note';
+      div.textContent = text;
+      body.append(div);
+    };
+    const empty = (text: string) => {
+      const div = document.createElement('div');
+      div.className = 'empty';
+      div.textContent = text;
+      body.append(div);
+    };
     const section = (title: string, codes: string[]) => {
       if (!codes.length) return;
       const label = document.createElement('div');
@@ -281,12 +333,13 @@ export class EmotePicker {
         b.title = code;
         const img = document.createElement('img');
         img.src = e.src;
+        if (e.srcset) img.srcset = e.srcset;
         img.alt = code;
         img.loading = 'lazy';
         b.append(img);
         b.addEventListener('click', () => {
           void insertIntoChat(this.adapter, code).then((ok) => {
-            if (ok) void pushRecent(code);
+            if (ok) void pushRecent(tab, code);
           });
           this.close();
         });
@@ -294,19 +347,50 @@ export class EmotePicker {
       }
       body.append(label, grid);
     };
-    const all = [...emotes.keys()].sort((a, b) => a.localeCompare(b));
+    // Код, который есть и в Owl Smile, и в BetterTTV, в чате станет смайлом Owl Smile — во вкладке BetterTTV его нет
+    const inTab = (code: string) => {
+      const e = emotes.get(code);
+      return e !== undefined && Boolean(e.bttv) === (tab === 'bttv');
+    };
+    const byName = (a: string, b: string) => a.localeCompare(b);
+    const found = (codes: string[]) => codes.filter((c) => c.toLowerCase().includes(q));
+
+    if (tab === 'owl') {
+      const all = [...emotes.keys()].filter(inTab).sort(byName);
+      if (q) {
+        section('Найдено', found(all));
+      } else {
+        section('Недавние', recent.filter(inTab));
+        section('Все смайлы', all);
+      }
+      if (!body.childElementCount) empty(all.length ? 'Ничего не найдено' : 'Смайлов пока нет — нажмите «+», чтобы загрузить');
+      return;
+    }
+
+    const ch = bttv.channel;
+    const channelCodes = ch ? [...ch.codes].sort(byName) : [];
+    const globalCodes = [...bttv.global].sort(byName);
     if (q) {
-      section('Найдено', all.filter((c) => c.toLowerCase().includes(q)));
+      section('Найдено', found([...channelCodes, ...globalCodes]));
+      if (!body.childElementCount) empty('Ничего не найдено');
+      return;
+    }
+    section('Недавние', recent.filter(inTab));
+    if (!ch) {
+      if (this.adapter.platform !== 'twitch') {
+        note('Смайлы Twitch-канала не показаны: канал не указан. Укажите его в окне расширения — значок 🦉 на панели браузера.');
+      }
+    } else if (ch.state === 'loading') {
+      note(`Загрузка смайлов канала ${ch.name}…`);
+    } else if (ch.state === 'error') {
+      note(`Смайлы канала ${ch.name} не загрузились: ${ch.error ?? 'ошибка'}`, true);
+    } else if (!channelCodes.length) {
+      note(`У канала ${ch.name} нет смайлов BetterTTV`);
     } else {
-      section('Недавние', recent.filter((c) => emotes.has(c)));
-      section('Все смайлы', all);
+      section(`Канал ${ch.name}`, channelCodes);
     }
-    if (!body.childElementCount) {
-      const empty = document.createElement('div');
-      empty.className = 'empty';
-      empty.textContent = emotes.size ? 'Ничего не найдено' : 'Смайлов пока нет — нажмите «+», чтобы загрузить';
-      body.append(empty);
-    }
+    if (globalCodes.length) section('Глобальные', globalCodes);
+    else note('Глобальные смайлы BetterTTV ещё не загружены — нужен интернет.');
   }
 }
 

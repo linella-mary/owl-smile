@@ -6,6 +6,7 @@
  */
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -112,6 +113,55 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms = 
   return null;
 }
 
+/**
+ * Подставной BetterTTV + api.ivr.fi + CDN на одном локальном сервере.
+ * Глобальных смайлов 40 — чтобы было видно, что картинки не качаются заранее.
+ * CatJam есть и в BetterTTV — в чате должен победить смайл Owl Smile.
+ */
+const bttvId = (n: number) => n.toString(16).padStart(24, 'b');
+function startBttvServer(): Promise<{ origin: string; imageHits: () => number; close: () => Promise<void> }> {
+  const global = [
+    ...Array.from({ length: 40 }, (_, i) => ({ id: bttvId(100 + i), code: `Glob${i}`, imageType: 'png', animated: false })),
+    { id: bttvId(1), code: 'CatJam', imageType: 'png', animated: false },
+    { id: bttvId(2), code: 'c!', imageType: 'png', animated: false, modifier: true },
+  ];
+  const users: Record<string, { id: string; displayName: string; emote: string }> = {
+    somechannel: { id: '777', displayName: 'SomeChannel', emote: 'ChanEmote' },
+    vkchan: { id: '778', displayName: 'VkChan', emote: 'VkChanEmote' },
+  };
+  let hits = 0;
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url!, 'http://x');
+    const json = (status: number, body: unknown) => {
+      res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+      res.end(JSON.stringify(body));
+    };
+    if (url.pathname === '/3/cached/emotes/global') return json(200, global);
+    if (url.pathname === '/v2/twitch/user') {
+      const login = url.searchParams.get('login') ?? '';
+      const u = users[login];
+      return json(200, u ? [{ login, id: u.id, displayName: u.displayName }] : []);
+    }
+    const ch = /^\/3\/cached\/users\/twitch\/(\d+)$/.exec(url.pathname);
+    if (ch) {
+      const u = Object.values(users).find((x) => x.id === ch[1]);
+      return u ? json(200, { id: 'x', channelEmotes: [{ id: bttvId(Number(u.id)), code: u.emote, imageType: 'png', animated: false }], sharedEmotes: [] }) : json(404, { message: 'user not found' });
+    }
+    if (/^\/emote\/[0-9a-f]{24}\/[123]x\.webp$/.test(url.pathname)) {
+      hits++;
+      res.writeHead(200, { 'content-type': 'image/png' });
+      return res.end(PNG_1x1);
+    }
+    json(404, { message: 'not found' });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as { port: number };
+      resolve({ origin: `http://127.0.0.1:${port}`, imageHits: () => hits, close: () => new Promise((r) => server.close(() => r())) });
+    });
+  });
+}
+
 async function storage(sw: Worker, key: string): Promise<any> {
   // Выполняется внутри сервис-воркера расширения, где есть глобальный chrome.
   return sw.evaluate(async (k) => {
@@ -132,11 +182,14 @@ async function main() {
     'users/vk/данил кузнецов..json': JSON.stringify({ badges: ['founder'], paint: 'gold' }),
   });
 
+  const bttvServer = await startBttvServer();
+
   console.log('Сборка расширения с локальным сервером…');
   execSync('npx wxt build', {
     stdio: 'pipe',
     env: {
       ...process.env,
+      WXT_BTTV_TEST_HOST: bttvServer.origin,
       WXT_GITFLIC_HOST: server.origin,
       WXT_GITFLIC_OWNER: 'owner',
       WXT_GITFLIC_REPO: 'data',
@@ -271,6 +324,87 @@ async function main() {
     check('VK: Tab после «@» оставлен площадке (ник не подменяется смайлом)', !(await vkText()).includes('CatJam'), JSON.stringify(await vkText()));
     await setReply('', 'end');
 
+    // 4c. BetterTTV на Twitch: смайлы открытого канала и глобальные, в чате и во второй вкладке окна
+    const addTwitchMessage = (user: string, text: string) =>
+      page.evaluate(({ user, text }) => {
+        const div = document.createElement('div');
+        div.className = 'chat-line__message';
+        div.setAttribute('data-a-user', user);
+        div.innerHTML = `<span class="chat-author__display-name">${user}</span>: <span class="text-fragment">${text}</span>`;
+        document.getElementById('chat')!.append(div);
+      }, { user, text });
+    // Страница https, а подставной CDN — http: Chrome поднимает адрес картинки до https, поэтому картинки
+    // отдаём перехватом в самом браузере и считаем запросы
+    let imageHits = 0;
+    await ctx.route(/\/emote\/[0-9a-f]{24}\/[123]x\.webp$/, (r) => {
+      imageHits++;
+      return r.fulfill({ contentType: 'image/png', body: PNG_1x1 });
+    });
+    await waitFor(() => storage(sw, 'bttv:ch:somechannel').then((c) => c?.at > 0));
+    await addTwitchMessage('bttvfan', 'ChanEmote Glob3 CatJam');
+    const bttvImgs = await waitFor(async () => {
+      const imgs = await page.$$eval('[data-a-user="bttvfan"] img.owl-emote', (els) => els.map((e) => ({ alt: e.getAttribute('alt'), src: e.getAttribute('src')!, srcset: e.getAttribute('srcset') })));
+      return imgs.length === 3 ? imgs : null;
+    });
+    check('BTTV: смайлы канала и глобальные в сообщении Twitch', Boolean(bttvImgs?.[0]?.src.includes(bttvId(777)) && bttvImgs?.[1]?.src.includes(bttvId(103)) && bttvImgs?.[0]?.srcset?.includes('2x.webp 2x')), JSON.stringify(bttvImgs?.map((i) => i.alt)));
+    check('BTTV: при совпадении кода побеждает Owl Smile', Boolean(bttvImgs?.[2]?.src.startsWith('data:')), bttvImgs?.[2]?.src.slice(0, 30));
+    const drawn = await waitFor(() => page.$eval('[data-a-user="bttvfan"] img.owl-emote[alt="ChanEmote"]', (e) => (e as HTMLImageElement).complete && (e as HTMLImageElement).naturalWidth > 0));
+    check('BTTV: картинка смайла загрузилась и нарисована', Boolean(drawn));
+    const hitsBeforePicker = imageHits + bttvServer.imageHits();
+    check('BTTV: картинки заранее не качаются (только видимые в чате)', hitsBeforePicker > 0 && hitsBeforePicker <= 4, `${hitsBeforePicker} запросов картинок при 41 смайле в списках`);
+
+    await page.click('#owl-picker-btn');
+    await page.locator('.tabs button[data-tab="bttv"]').click();
+    const tabText = (await page.locator('.panel .body').textContent()) ?? '';
+    check('BTTV: во второй вкладке — разделы канала и глобальных', tabText.includes('Канал SomeChannel') && tabText.includes('Глобальные'), tabText.slice(0, 80));
+    check('BTTV: модификаторы и код Owl Smile во вкладке не показаны', (await page.locator('.panel button[title="c!"], .panel button[title="CatJam"]').count()) === 0);
+    check('BTTV: кнопки «+» на вкладке BetterTTV нет', await page.locator('.panel .add').isHidden());
+    if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-picker-bttv.png') });
+    await page.locator('.panel input').fill('chan');
+    check('BTTV: поиск по вкладке', (await page.locator('.panel .grid button').count()) === 1);
+    await page.evaluate(() => (window as unknown as { __owlReset(): void }).__owlReset());
+    await page.locator('.panel button[title="ChanEmote"]').click();
+    check('BTTV: клик вставляет код', Boolean(await waitFor(async () => ((await model()) === 'ChanEmote ' ? 'ok' : null), 3000)), JSON.stringify(await model()));
+    await page.click('#owl-picker-btn');
+    check('BTTV: окно открывается на последней вкладке, «Недавние» свои', (await page.locator('.tabs button[data-tab="bttv"][aria-selected="true"]').count()) === 1 && Boolean(await page.$('.panel >> text=Недавние')));
+    await page.locator('.tabs button[data-tab="owl"]').click();
+    check('BTTV: на вкладке Owl Smile смайлов BetterTTV нет', (await page.locator('.panel button[title="Glob3"]').count()) === 0 && (await page.locator('.panel button[title="CatJam"]').count()) > 0);
+    await page.keyboard.press('Escape');
+
+    // 4d. BetterTTV на VK Live: канал из окна расширения
+    await vk.click('#owl-picker-btn');
+    await vk.locator('.tabs button[data-tab="bttv"]').click();
+    check('VK, BTTV: без канала — подсказка, глобальные есть', Boolean(await vk.$('.panel >> text=канал не указан')) && (await vk.locator('.panel button[title="Glob0"]').count()) === 1);
+    const popup = await ctx.newPage();
+    await popup.goto(`chrome-extension://${extId}/popup.html`);
+    await popup.fill('#bttv-channel', 'нет такого');
+    await popup.click('.bttv button');
+    check('окно расширения: неверный канал отклонён', Boolean(await waitFor(() => popup.$('.bttv >> text=не похоже на Twitch-канал'))));
+    await popup.fill('#bttv-channel', 'https://www.twitch.tv/VkChan');
+    await popup.click('.bttv button');
+    check('окно расширения: канал сохранён', Boolean(await waitFor(() => popup.$('.bttv >> text=Канал VkChan: 1 смайл'))), (await popup.textContent('.bttv')) ?? '');
+    if (process.env.SHOTS) await popup.screenshot({ path: path.join(process.env.SHOTS, 'popup-bttv.png') });
+    await popup.close();
+    check('VK, BTTV: открытое окно смайлов само показало канал', Boolean(await waitFor(() => vk.$('.panel >> text=Канал VkChan'))));
+    await vk.locator('.panel button[title="VkChanEmote"]').click();
+    check('VK, BTTV: клик вставляет код', Boolean(await waitFor(async () => ((await vkText()) === 'VkChanEmote ' ? 'ok' : null), 3000)), JSON.stringify(await vkText()));
+    await setReply('', 'end');
+    await vk.evaluate(() => {
+      const tpl = document.querySelector('[data-message-id="2"]')!.cloneNode(true) as HTMLElement;
+      tpl.querySelector('[data-role="markup"]')!.textContent = 'VkChanEmote Glob1 ChanEmote';
+      tpl.dataset.messageId = '3';
+      delete tpl.dataset.owl;
+      document.getElementById('chat')!.append(tpl);
+    });
+    const vkBttv = await waitFor(async () => {
+      const alts = await vk.$$eval('[data-message-id="3"] img.owl-emote', (els) => els.map((e) => e.getAttribute('alt')));
+      return alts.length ? alts : null;
+    });
+    check('VK, BTTV: смайлы канала из настроек и глобальные в чате; чужой канал — нет', JSON.stringify(vkBttv) === '["VkChanEmote","Glob1"]', JSON.stringify(vkBttv));
+    await vk.click('#owl-picker-btn');
+    await vk.locator('.tabs button[data-tab="owl"]').click();
+    await vk.keyboard.press('Escape');
+
     // 5. Загрузка смайла через страницу manage
     const manage = await ctx.newPage();
     await manage.goto(`chrome-extension://${extId}/manage.html`);
@@ -370,6 +504,7 @@ async function main() {
   } finally {
     await ctx.close();
     await server.close();
+    await bttvServer.close();
     fs.rmSync(profile, { recursive: true, force: true });
   }
   console.log(failures ? `\nПровалено проверок: ${failures}` : '\nВсе проверки пройдены');

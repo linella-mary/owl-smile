@@ -4,16 +4,48 @@ import type { Paint, UserCosmetics } from '../shared/schema';
 import { applyPaint } from './paint';
 import { tokenize } from './tokenizer';
 
+export interface EmoteImage {
+  src: string;
+  /** У смайлов BetterTTV — картинка покрупнее для чётких экранов. */
+  srcset?: string;
+  w: number;
+  h: number;
+  /** Смайл BetterTTV (а не из базы Owl Smile). */
+  bttv?: boolean;
+}
+
+/** Смайлы BetterTTV для окна смайлов: коды по разделам и состояние загрузки канала. */
+export interface BttvView {
+  global: string[];
+  /** null — канала нет: на VK он не указан в настройках, на Twitch открыта страница без канала. */
+  channel: {
+    login: string;
+    name: string;
+    codes: string[];
+    state: 'loading' | 'ok' | 'missing' | 'error';
+    error?: string;
+  } | null;
+}
+
 export interface RenderData {
-  /** Версия данных (HEAD репозитория) — для пропуска уже обработанных сообщений. */
+  /** Версия данных (HEAD репозитория и списков BetterTTV) — для пропуска уже обработанных сообщений. */
   version: string;
-  emotes: Map<string, { src: string; w: number; h: number }>;
+  /** Все смайлы для чата: сначала Owl Smile, потом BetterTTV (при совпадении кода побеждает Owl Smile). */
+  emotes: Map<string, EmoteImage>;
   badges: Map<string, { src: string; title: string }>;
   paints: Record<string, Paint>;
   users: Record<string, UserCosmetics>;
+  bttv: BttvView;
 }
 
-export const emptyData = (): RenderData => ({ version: '', emotes: new Map(), badges: new Map(), paints: {}, users: {} });
+export const emptyData = (): RenderData => ({
+  version: '',
+  emotes: new Map(),
+  badges: new Map(),
+  paints: {},
+  users: {},
+  bttv: { global: [], channel: null },
+});
 
 /**
  * Вставляет смайлы, иконки и эффекты в сообщения чата.
@@ -64,6 +96,7 @@ export class ChatRenderer {
           const img = document.createElement('img');
           img.className = 'owl-emote';
           img.src = e.src;
+          if (e.srcset) img.srcset = e.srcset;
           img.alt = t.code;
           img.title = t.code;
           img.decoding = 'async';
