@@ -67,8 +67,9 @@ export class GithubBuild {
   async waitForRun(sha: string, timeoutMs = 40 * 60_000, onTick?: (run: WorkflowRun | null) => void): Promise<WorkflowRun> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const runs = (await this.call(`/repos/${this.repo}/actions/workflows/${WORKFLOW}/runs?head_sha=${sha}&per_page=5`)).workflow_runs as WorkflowRun[];
-      const run = runs[0] ?? null;
+      // Общий список сборок репозитория: запрос «по workflow» отвечает 404, пока GitHub не увидел новый файл
+      const runs = (await this.call(`/repos/${this.repo}/actions/runs?head_sha=${sha}&per_page=20`)).workflow_runs as (WorkflowRun & { path: string })[];
+      const run = runs.find((r) => r.path === `.github/workflows/${WORKFLOW}`) ?? null;
       onTick?.(run);
       if (run?.status === 'completed') return run;
       if (Date.now() > deadline) throw new Error(run ? `сборка не закончилась за отведённое время: ${run.html_url}` : 'сборка на GitHub так и не началась');
