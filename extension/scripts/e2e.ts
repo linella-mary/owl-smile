@@ -34,6 +34,15 @@ const TWITCH_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head>
   <div class="chat-input__buttons-container"><div>0 · 41 550</div><div class="right"><div><div><button data-a-target="chat-settings">⚙</button></div></div><button data-a-target="chat-send-button">Чат</button></div></div>
 </div>
 <script>
+  // Как живой Twitch: при нажатии в нижнем ряду он перерисовывается — шестерёнка в новой обёртке,
+  // наша кнопка переезжает к ней, и click по ней не наступает (живой тест 15.11.2026)
+  document.querySelector('.chat-input__buttons-container').addEventListener('pointerdown', () => {
+    const old = document.querySelector('[data-a-target="chat-settings"]').parentElement.parentElement;
+    const fresh = old.cloneNode(true);
+    const row = old.parentElement;
+    old.remove();
+    row.prepend(fresh); // шестерёнка теперь в начале ряда — сова переедет к ней, уйдя из-под курсора
+  }, true);
   // Редактор «как Slate»: текст живёт в модели и меняется только через beforeinput.
   // Изменения DOM в обход модели (execCommand без beforeinput) откатываются —
   // в чат ушло бы содержимое модели, а не то, что было видно на экране.
@@ -70,7 +79,8 @@ const VK_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><bod
 <div class="ChatPublisher_root_xCqwT" id="chat-pub-root"><div class="Publisher_root_OEAeu">
   <div class="Publisher_editorWrapper_ruJa3"><div class="Publisher_editor_lrEMS"><div class="codex-editor"><div class="ce-block"><div class="ce-paragraph cdx-block" contenteditable="true" style="min-height:20px;border:1px solid #555"></div></div></div></div></div>
   <div class="Publisher_actionsContainer_nXHDH"><div class="Publisher_smileContainer_MjJHi"><button>☺</button></div></div>
-</div><div class="ChatPublisher_footer_e2e"><div>4,7K</div><div class="ChatPublisher_actions_e2e"><button>🚀</button><div><button>⚙</button></div></div></div></div>
+</div></div>
+<div class="ChatFooter_root_CsObC"><div class="StreamChatFooter_root_C5qUZ"><button class="PointActions_buttonPoints_prHjq" type="button">4,7K</button></div><div class="ChatFooter_separator_nW26R"></div><div class="Tooltip_root_TzhW7 Tooltip_byHover_RQgvf" data-test-id="Tooltip:ROOT"><div class="Tooltip_content_ibUr0">Студия</div><div class="Tooltip_children_VVh5K"><a class="ChatFooter_linkToStudio_bao3l" href="#studio">🚀</a></div></div><div class="Tooltip_root_TzhW7 Settings_settingsButton_JG_2u" data-test-id="Tooltip:ROOT"><div class="Tooltip_content_ibUr0">Настройки чата</div><div class="Tooltip_children_VVh5K"><button class="Settings_button_DMJ5s" data-test-id="chatSettingsButton" type="button">⚙</button></div></div></div>
 <script>
   // Как VK в режиме ответа: нажатие мыши вне блока ввода отменяет ответ и стирает набранный текст
   // (жалоба 14.11.2026: окно смайлов совы было вне блока, и выбор смайла сбрасывал ответ).
@@ -344,6 +354,16 @@ async function main() {
     // 3. Кнопка смайлов (по умолчанию — под полем ввода, перед шестерёнкой) → вставка в поле ввода
     const nextToOwl = (p: Page) => p.evaluate(() => document.getElementById('owl-picker-btn')?.nextElementSibling?.textContent ?? '');
     check('Twitch: кнопка под полем ввода, перед шестерёнкой', Boolean(await waitFor(async () => (await nextToOwl(page)) === '⚙')), await nextToOwl(page));
+    // Кнопка старого экземпляра скрипта (обновили расширение, не перезагрузив вкладку) — заменяется своей
+    await page.evaluate(() => {
+      const stale = document.createElement('button');
+      stale.id = 'owl-picker-btn';
+      stale.textContent = 'stale';
+      document.querySelector('[data-a-target="chat-settings"]')!.closest('.right')!.prepend(stale);
+    });
+    check('Twitch: кнопку старого экземпляра заменяет своя', Boolean(await waitFor(async () =>
+      (await page.$$eval('#owl-picker-btn', (b) => b.map((x) => x.textContent).join())) === '🦉' && (await nextToOwl(page)) === '⚙', 5000)),
+      await page.$$eval('#owl-picker-btn', (b) => b.map((x) => x.textContent).join()));
     await page.click('#owl-picker-btn');
     if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-picker.png') });
     await page.locator('button[title="CatJam"]').click();
@@ -453,11 +473,12 @@ async function main() {
     check('VK, настройки: Twitch получил свой размер', Boolean(await waitFor(async () => (await emoteHeight()) === 20, 5000)), `${await emoteHeight()} px`);
     await setPrefs(sw, null);
     check('VK, настройки: сброс', Boolean(await waitFor(async () => !(await vk.$('.owl-collapsed')) && (await vkEmoteH()) === 32, 5000)));
-    check('VK: кнопка под полем ввода, между ракетой и шестерёнкой', Boolean(await waitFor(async () => (await nextToOwl(vk)) === '⚙')), await nextToOwl(vk));
+    // Ряд VK — вне блока ввода, шестерёнка в обёртке-подсказке «Настройки чата» (разметка с живой страницы)
+    check('VK: кнопка под полем ввода, между ракетой и шестерёнкой', Boolean(await waitFor(async () => (await nextToOwl(vk)) === 'Настройки чата⚙')), await nextToOwl(vk));
     await setPrefs(sw, { pickerPlace: 'input' });
     check('VK: настройка «в поле ввода» — рядом с их смайлами', Boolean(await waitFor(() => vk.$('#owl-picker-btn + [class*="Publisher_smileContainer_"]'), 5000)));
     await setPrefs(sw, { pickerPlace: 'toolbar' });
-    check('VK: и обратно под поле', Boolean(await waitFor(async () => (await nextToOwl(vk)) === '⚙', 5000)));
+    check('VK: и обратно под поле', Boolean(await waitFor(async () => (await nextToOwl(vk)) === 'Настройки чата⚙', 5000)));
     await vk.click('#owl-picker-btn');
     check('VK: «Недавние» помнят смайл из Twitch', Boolean(await vk.$('text=Недавние')));
     await vk.locator('button[title="CatJam"]').first().click();

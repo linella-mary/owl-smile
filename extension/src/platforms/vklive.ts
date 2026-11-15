@@ -60,16 +60,14 @@ export const vkliveAdapter: ChatAdapter = {
     );
   },
 
-  // Ряд под полем ввода: баллы канала слева, справа ракета и шестерёнка. Классы ряда неизвестны, поэтому
-  // ищем последнюю кнопку блока ввода, стоящую после рамки поля (не панель ответа над полем). Сова — перед ней.
+  // Ряд под полем ввода (разметка с живой страницы 15.11.2026): ChatFooter_root_ — сосед #chat-pub-root, вне его:
+  //   баллы канала · разделитель · [ссылка «Студия» (ракета, только у владельца)] · подсказка «Настройки чата»
+  //   с кнопкой [data-test-id="chatSettingsButton"]. Сова — перед шестерёнкой вместе с её подсказкой.
   getPickerToolbarAnchor() {
-    const root = document.getElementById('chat-pub-root') ?? document.querySelector('[class*="ChatPublisher_root_"]');
-    const box = root?.querySelector('[class*="Publisher_root_"]');
-    if (!root || !box) return null;
-    const after = [...root.querySelectorAll('button')].filter(
-      (b) => b.id !== 'owl-picker-btn' && !box.contains(b) && box.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    const last = after.at(-1);
-    return last ? outerWrapper(last) : null;
+    const gear = document.querySelector('[data-test-id="chatSettingsButton"]');
+    if (gear) return gear.closest('[data-test-id="Tooltip:ROOT"]') ?? outerWrapper(gear);
+    const footer = document.querySelector('[class*="ChatFooter_root_"]');
+    const last = footer ? [...footer.querySelectorAll('button, a')].filter((b) => b.id !== 'owl-picker-btn').at(-1) : undefined;
+    return last ? (last.closest('[data-test-id="Tooltip:ROOT"]') ?? outerWrapper(last)) : null;
   },
 };

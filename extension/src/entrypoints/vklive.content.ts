@@ -6,7 +6,8 @@ import { vkliveAdapter } from '../platforms/vklive';
 export default defineContentScript({
   matches: ['https://live.vkvideo.ru/*'],
   runAt: 'document_idle',
-  main() {
-    void startOwl(vkliveAdapter);
+  main(ctx) {
+    // ctx.onInvalidated — расширение обновили и во вкладку встал новый экземпляр: этот выключается
+    void startOwl(vkliveAdapter, (stop) => ctx.onInvalidated(stop));
   },
 });

@@ -155,6 +155,9 @@ async function pushRecent(tab: Tab, code: string): Promise<void> {
   await browser.storage.local.set({ [recentKey(tab)]: list });
 }
 
+/** События нажатия на кнопку, которые площадке не отдаём (см. EmotePicker.onPress). */
+const PRESS_EVENTS = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click', 'touchstart', 'touchend'];
+
 const STOP_EVENTS = [
   'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'touchstart', 'touchend',
   'keydown', 'keyup', 'keypress', 'beforeinput', 'input', 'focusin', 'focusout', 'wheel',
@@ -213,6 +216,9 @@ export class EmotePicker {
   private root: ShadowRoot | null = null;
   private redraw: (() => void) | null = null;
 
+  /** Своя кнопка (у старого экземпляра скрипта в той же вкладке — своя, с тем же id). */
+  private btn: HTMLElement | null = null;
+
   constructor(
     private readonly adapter: ChatAdapter,
     private readonly getData: () => RenderData,
@@ -230,14 +236,19 @@ export class EmotePicker {
     // а когда появится, кнопка переедет (вызывается на каждое изменение DOM).
     const anchor =
       (s.pickerPlace === 'toolbar' ? this.adapter.getPickerToolbarAnchor?.() : null) ?? this.adapter.getPickerAnchor();
-    const existing = document.getElementById(BTN_ID);
+    // Кнопка старого экземпляра скрипта (расширение обновили, вкладку не перезагрузили): он отрезан
+    // от расширения, и нажатие на его кнопку ничего бы не открыло — убираем, ставим свою.
+    for (const b of document.querySelectorAll(`[id="${BTN_ID}"]`)) if (b !== this.btn) b.remove();
+    const existing = this.btn?.isConnected ? this.btn : null;
     if (existing) {
-      if (anchor && existing.nextElementSibling !== anchor) anchor.before(existing);
+      // Пока окно открыто — не двигаем: окно стоит по месту кнопки
+      if (anchor && !this.host && existing.nextElementSibling !== anchor) anchor.before(existing);
       return;
     }
     if (!anchor) return;
     const btn = document.createElement('button');
     btn.id = BTN_ID;
+    this.btn = btn;
     btn.type = 'button';
     btn.title = 'Смайлы Owl Smile';
     btn.setAttribute('aria-label', 'Смайлы Owl Smile');
@@ -252,19 +263,37 @@ export class EmotePicker {
     } satisfies Partial<CSSStyleDeclaration>);
     btn.addEventListener('mouseenter', () => (btn.style.background = '#ffffff1f'));
     btn.addEventListener('mouseleave', () => (btn.style.background = 'none'));
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (this.host) this.close();
-      else void this.open(btn);
-    });
+    // Нажатия на кнопку — см. onPress (перехват на window, раньше обработчиков площадки)
+    for (const type of PRESS_EVENTS) window.addEventListener(type, this.onPress, true);
     anchor.before(btn);
   }
+
+  /**
+   * Нажатия на кнопку ловим в фазе перехвата на window — раньше всех обработчиков площадки, и дальше
+   * не пускаем: VK в режиме ответа по нажатию вне блока ввода (перехват на document) стирает ответ,
+   * а в панели под полем кнопка как раз вне блока. Открываем по pointerdown, а не по click: Twitch при
+   * нажатии перерисовывает ряд, кнопка переезжает, и click не наступает (живой тест 15.11.2026).
+   * preventDefault — фокус остаётся в поле ввода.
+   */
+  private onPress = (e: Event) => {
+    const btn = this.btn;
+    if (!btn || !(e.target instanceof Node) || !btn.contains(e.target)) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    const press = e.type === 'pointerdown' && (e as PointerEvent).button === 0;
+    const keyboard = e.type === 'click' && (e as MouseEvent).detail === 0; // Enter/пробел
+    if (!press && !keyboard) return;
+    if (this.host) this.close();
+    else void this.open(btn);
+  };
 
   /** Убрать кнопку и окно (при выключении скрипта). */
   dispose(): void {
     this.close();
-    document.getElementById(BTN_ID)?.remove();
+    // Только свою: кнопка с тем же id может быть уже нового экземпляра
+    this.btn?.remove();
+    this.btn = null;
+    for (const type of PRESS_EVENTS) window.removeEventListener(type, this.onPress, true);
   }
 
   /** Данные обновились (например, догрузились смайлы канала) — перерисовать открытое окно. */

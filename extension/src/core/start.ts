@@ -98,7 +98,10 @@ async function currentBttvLogin(adapter: ChatAdapter): Promise<string | null> {
 }
 
 /** Запуск на странице площадки: первичный проход, слежение за чатом, обновление при синхронизации. */
-export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRenderer; data: () => RenderData }> {
+export async function startOwl(
+  adapter: ChatAdapter,
+  onInvalidated?: (stop: () => void) => void,
+): Promise<{ renderer: ChatRenderer; data: () => RenderData }> {
   // Стили под вёрстку площадки (style.css: .owl-vk …)
   const html = document.documentElement;
   html.classList.add(`owl-${adapter.platform}`);
@@ -159,16 +162,23 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
 
   const sel = adapter.messageSelector;
   let href = location.href;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    observer.disconnect();
+    removeTab();
+    removeHover();
+    removeCards();
+    removeSettings();
+    picker.dispose();
+  };
   const observer = new MutationObserver((mutations) => {
     // Расширение перезагрузили/обновили — этот экземпляр скрипта «осиротел»: выключаемся,
     // новый экземпляр ставит фоновый скрипт (см. background.ts).
+    if (stopped) return;
     if (!browser.runtime?.id) {
-      observer.disconnect();
-      removeTab();
-      removeHover();
-      removeCards();
-      removeSettings();
-      picker.dispose();
+      stop();
       return;
     }
     // Twitch переходит между каналами без перезагрузки страницы
@@ -190,6 +200,9 @@ export async function startOwl(adapter: ChatAdapter): Promise<{ renderer: ChatRe
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
+  // Новый экземпляр уже во вкладке (WXT сообщает сразу, не дожидаясь изменений DOM) — выключаемся,
+  // иначе наша кнопка и обработчики, уже отрезанные от расширения, перехватывали бы нажатия.
+  onInvalidated?.(stop);
 
   browser.storage.local.onChanged.addListener((changes) => {
     if (adapter.platform !== 'twitch' && K_BTTV_SETTING in changes) {
