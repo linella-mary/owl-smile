@@ -8,6 +8,8 @@ node_modules/
 *.log
 .spike/
 web-ext-artifacts/
+# Сборка плагина OBS (шаблон + наши исходники; собирается на GitHub)
+build-plugin/
 
 # Исходное задание — только локально
 задание.md

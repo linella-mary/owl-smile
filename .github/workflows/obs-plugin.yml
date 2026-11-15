@@ -1,0 +1,76 @@
+# Сборка плагина Owl Smile для OBS (Windows x64) на серверах GitHub.
+# Код живёт на GitFlic; GitHub — только сборщик: npm run release отправляет сюда коммит и тег,
+# ждёт эту сборку и прикладывает архив к релизу на GitFlic.
+name: OBS plugin
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  # Шаблон плагинов OBS на зафиксированном коммите: cmake/, скрипты сборки, buildspec с версиями зависимостей
+  TEMPLATE_SHA: 3e7d7ac3b5342cd7d9b88890b9c70b472d1520fc
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Бандл для доков (owl-obs.js)
+        working-directory: extension
+        run: |
+          npm ci --ignore-scripts
+          npm run build:obs
+
+      - name: Шаблон плагина и наши исходники
+        run: |
+          git clone --quiet https://github.com/obsproject/obs-plugintemplate.git build-plugin
+          git -C build-plugin checkout --quiet $env:TEMPLATE_SHA
+          Remove-Item build-plugin/src/plugin-main.c
+          Copy-Item obs-plugin/src/* build-plugin/src/ -Force
+          Copy-Item obs-plugin/CMakeLists.txt build-plugin/ -Force
+          New-Item -ItemType Directory -Force build-plugin/data | Out-Null
+          Copy-Item extension/.output/obs/owl-obs.js build-plugin/data/owl-obs.js
+
+          # Имя и версия плагина — как у расширения
+          $pkg = Get-Content extension/package.json -Raw | ConvertFrom-Json
+          $spec = Get-Content build-plugin/buildspec.json -Raw | ConvertFrom-Json
+          $spec.name = 'owl-smile'
+          $spec.displayName = 'Owl Smile'
+          $spec.version = $pkg.version
+          $spec.author = 'Owl Smile'
+          $spec.website = 'https://gitflic.ru/project/ju1iana/owl-smile'
+          $spec.email = 'owl-smile@gitflic.ru'
+          $spec | ConvertTo-Json -Depth 10 | Set-Content build-plugin/buildspec.json -Encoding utf8
+          "PLUGIN_VERSION=$($pkg.version)" >> $env:GITHUB_ENV
+
+      - name: Сборка
+        working-directory: build-plugin
+        run: .github/scripts/Build-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
+
+      - name: Архив для папки плагинов OBS
+        working-directory: build-plugin
+        run: |
+          # release/RelWithDebInfo/owl-smile/{bin/64bit,data} → распаковывается в C:\ProgramData\obs-studio\plugins
+          $out = "owl-smile-obs-$env:PLUGIN_VERSION.zip"
+          Get-ChildItem release/RelWithDebInfo/owl-smile/bin/64bit -Filter *.pdb | Remove-Item
+          Compress-Archive -Path release/RelWithDebInfo/owl-smile -DestinationPath $out -Force
+          Get-ChildItem $out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: owl-smile-obs
+          path: build-plugin/owl-smile-obs-*.zip
+          if-no-files-found: error

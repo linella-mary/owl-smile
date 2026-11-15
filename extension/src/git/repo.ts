@@ -1,50 +1,12 @@
 import git, { Errors, type HttpClient, type TreeEntry } from 'isomorphic-git';
-import type { ZodType } from 'zod';
 import { repoUrl, type RepoConfig } from '../shared/config';
-import {
-  BadgeInfoSchema,
-  BadgeSchema,
-  SLUG_RE,
-  EmoteSchema,
-  MetaSchema,
-  NameplateSchema,
-  PaintSchema,
-  ProfileSchema,
-  PLATFORMS,
-  UserSchema,
-  isValidNick,
-  normalizeNick,
-  userKey,
-  type Badge,
-  type BadgeInfo,
-  type Emote,
-  type Nameplate,
-  type Paint,
-  type Profile,
-  type UserCosmetics,
-} from '../shared/schema';
+import { MetaSchema } from '../shared/schema';
+import { snapshotFromFiles, type Snapshot } from '../shared/snapshot';
 
 /** Любой fs, который понимает isomorphic-git (LightningFS в браузере, node:fs в скриптах). */
 export type GitFs = Parameters<typeof git.init>[0]['fs'];
 
-/** Снимок данных репозитория на конкретном коммите. */
-export interface Snapshot {
-  head: string;
-  emotes: Record<string, Emote>;
-  badges: Record<string, Badge>;
-  /** Описания иконок (badges-info/). */
-  badgeInfo: Record<string, BadgeInfo>;
-  paints: Record<string, Paint>;
-  /** Ключ — "twitch:login" / "vk:nick". */
-  users: Record<string, UserCosmetics>;
-  nameplates: Record<string, Nameplate>;
-  /** Ключ — "twitch:login" / "vk:nick". Незнакомые поля из будущих версий сохраняются как есть. */
-  profiles: Record<string, Profile>;
-  /** Путь картинки ("img/....webp") → oid git-блоба. */
-  images: Record<string, string>;
-  /** Файлы, не прошедшие проверку (пропущены). */
-  problems: string[];
-}
+export type { Snapshot };
 
 /** Изменение файла: содержимое или null (удалить). */
 export type Changes = Map<string, Uint8Array | null>;
@@ -237,56 +199,12 @@ export class DataRepo {
     }
   }
 
-  private async readJsonDir<T>(
-    commit: string,
-    dirPath: string,
-    schema: ZodType<T>,
-    problems: string[],
-    check: (name: string, value: T) => boolean,
-  ): Promise<Array<[string, T]>> {
-    const out: Array<[string, T]> = [];
-    for (const e of await this.listDir(commit, dirPath)) {
-      if (e.type !== 'blob' || !e.path.endsWith('.json')) continue;
-      const name = e.path.slice(0, -5);
-      const file = `${dirPath}/${e.path}`;
-      try {
-        const parsed = schema.safeParse(JSON.parse(dec.decode(await this.readBlob(e.oid))));
-        if (parsed.success && check(name, parsed.data)) out.push([name, parsed.data]);
-        else problems.push(file);
-      } catch {
-        problems.push(file);
-      }
-    }
-    return out;
-  }
-
   /** Читает все данные на коммите `head`. Невалидные файлы пропускаются. */
-  async readSnapshot(head: string): Promise<Snapshot> {
-    const problems: string[] = [];
-    const snap: Snapshot = { head, emotes: {}, badges: {}, badgeInfo: {}, paints: {}, users: {}, nameplates: {}, profiles: {}, images: {}, problems };
-
-    for (const e of await this.listDir(head, 'img')) {
-      if (e.type === 'blob') snap.images[`img/${e.path}`] = e.oid;
-    }
-    const hasImage = (p: string) => p in snap.images;
-
-    for (const [, v] of await this.readJsonDir(head, 'emotes', EmoteSchema, problems, (n, v) => n === v.code && hasImage(v.image)))
-      snap.emotes[v.code] = v;
-    for (const [, v] of await this.readJsonDir(head, 'badges', BadgeSchema, problems, (n, v) => n === v.id && hasImage(v.image)))
-      snap.badges[v.id] = v;
-    for (const [id, v] of await this.readJsonDir(head, 'badges-info', BadgeInfoSchema, problems, (n) => SLUG_RE.test(n)))
-      snap.badgeInfo[id] = v;
-    for (const [, v] of await this.readJsonDir(head, 'paints', PaintSchema, problems, (n, v) => n === v.id))
-      snap.paints[v.id] = v;
-    for (const platform of PLATFORMS) {
-      for (const [nick, v] of await this.readJsonDir(head, `users/${platform}`, UserSchema, problems, (n) => n === normalizeNick(n) && isValidNick(platform, n)))
-        snap.users[userKey(platform, nick)] = v;
-      for (const [nick, v] of await this.readJsonDir(head, `profiles/${platform}`, ProfileSchema, problems, (n) => n === normalizeNick(n) && isValidNick(platform, n)))
-        snap.profiles[userKey(platform, nick)] = v;
-    }
-    for (const [, v] of await this.readJsonDir(head, 'nameplates', NameplateSchema, problems, (n, v) => n === v.id && (!v.image || hasImage(v.image))))
-      snap.nameplates[v.id] = v;
-    return snap;
+  readSnapshot(head: string): Promise<Snapshot> {
+    return snapshotFromFiles(head, {
+      list: async (dir) => (await this.listDir(head, dir)).filter((e) => e.type === 'blob').map((e) => ({ name: e.path, id: e.oid })),
+      read: (oid) => this.readBlob(oid),
+    });
   }
 
   /** Строит новое дерево из `baseTree` с применёнными изменениями. null — дерево стало пустым. */

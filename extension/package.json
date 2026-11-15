@@ -9,6 +9,8 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "build:firefox": "wxt build -b firefox",
+    "build:obs": "vite build --config vite.obs.config.ts",
+    "obs:plugin": "tsx scripts/obs-plugin.ts",
     "zip:firefox": "wxt zip -b firefox",
     "sign:firefox": "tsx scripts/firefox.ts",
     "compile": "tsc --noEmit",
@@ -25,6 +27,7 @@
   "dependencies": {
     "@isomorphic-git/lightning-fs": "^4.10.5",
     "buffer": "^6.0.3",
+    "fflate": "^0.8.2",
     "gifenc": "^1.0.3",
     "isomorphic-git": "^1.44.13",
     "preact": "^11.2.0",

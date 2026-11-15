@@ -7,7 +7,9 @@
  * 2. ставит версию в package.json (если указана) и коммитит;
  * 3. собирает zip и проверяет, что в сборку не попал ни один токен из .env;
  * 4. ставит тег vX.Y.Z и пушит ветку и тег в проект с кодом (обычными учётными данными git);
- * 5. создаёт релиз через API GitFlic и прикрепляет zip (и .xpi для Firefox).
+ * 4б. если заданы GITHUB_TOKEN и GITHUB_REPO — отправляет коммит и тег на GitHub, ждёт там
+ *     сборку плагина OBS (.github/workflows/obs-plugin.yml) и скачивает его архив;
+ * 5. создаёт релиз через API GitFlic и прикрепляет zip (и .xpi для Firefox, и плагин OBS).
  *
  * Нужны в .env: WXT_GITFLIC_OWNER, GITFLIC_CODE_REPO, GITFLIC_API_TOKEN (личный API-токен GitFlic).
  * Если заданы AMO_JWT_ISSUER и AMO_JWT_SECRET — ещё собирает и подписывает в Mozilla версию для Firefox
@@ -18,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildAndSignFirefox, secretValues } from './firefox';
 import { GitflicApi } from './gitflic-api';
+import { buildObsPlugin, GithubBuild } from './github';
 
 if (fs.existsSync('.env')) process.loadEnvFile('.env');
 const owner = process.env.WXT_GITFLIC_OWNER ?? '';
@@ -100,6 +103,19 @@ async function main() {
     stdio: 'inherit',
   });
 
+  // 4б. Плагин OBS — собирается на GitHub (там есть Visual Studio и Qt). Не вышло — релиз выходит без него
+  let obsZip: string | null = null;
+  const gh = GithubBuild.fromEnv();
+  if (gh) {
+    try {
+      obsZip = await buildObsPlugin(gh, root, git('rev-parse', 'HEAD'), outDir, [`refs/tags/${tag}`]);
+    } catch (e) {
+      console.log(`✖ Плагин OBS: ${e instanceof Error ? e.message : String(e)} — релиз выйдет без него`);
+    }
+  } else {
+    console.log('• Плагин OBS пропущен: нет GITHUB_TOKEN и GITHUB_REPO в .env');
+  }
+
   const description = [notesArg ?? '', '', 'Как установить или обновить — см. README проекта.'].join('\n').trim();
   if (!apiToken) {
     console.log(`
@@ -108,7 +124,8 @@ async function main() {
   2. Тег: ${tag}, название: Owl Smile ${version}
   3. Описание: ${description.replace(/\n+/g, ' ')}
   4. Прикрепите файл: ${path.join(outDir, zipName)}${xpiPath ? `
-     и файл для Firefox: ${xpiPath}` : ''}`);
+     и файл для Firefox: ${xpiPath}` : ''}${obsZip ? `
+     и плагин для OBS: ${obsZip}` : ''}`);
     return;
   }
 
@@ -117,6 +134,7 @@ async function main() {
   const id = await api.createRelease({ tag, title: `Owl Smile ${version}`, description });
   await api.uploadFile(id, path.join(outDir, zipName));
   if (xpiPath) await api.uploadFile(id, xpiPath);
+  if (obsZip) await api.uploadFile(id, obsZip);
   const files = await api.files(id);
   if (!files.some((f) => f.name === zipName)) fail('Файл не появился в релизе — проверьте страницу релизов');
   if (xpiPath && !files.some((f) => f.name === path.basename(xpiPath!))) fail('Файл для Firefox не появился в релизе — проверьте страницу релизов');
