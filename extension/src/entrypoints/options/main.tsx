@@ -9,6 +9,7 @@ import { loadRenderData } from '../../core/start';
 import { twitchAdapter } from '../../platforms/twitch';
 import type { ChatAdapter } from '../../platforms/types';
 import { K_BTTV_GLOBAL } from '../../shared/bttv';
+import { canPickFolder, downloadZip, exportToFolder, loadFolder, pickFolder } from '../../rutony/export';
 import { K_INDEX } from '../../shared/cache';
 import { PLATFORM_TITLES, PLATFORMS, type Platform } from '../../shared/ids';
 import {
@@ -269,6 +270,94 @@ function Picker({ s, update }: { s: Settings; update: Update }) {
   );
 }
 
+/** «1 смайл», «3 смайла», «5 смайлов». */
+function emotesCount(n: number): string {
+  const d = n % 10;
+  const dd = n % 100;
+  const word = d === 1 && dd !== 11 ? 'смайл' : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? 'смайла' : 'смайлов';
+  return `${n} ${word}`;
+}
+
+function RutonyChat() {
+  type Folder = Awaited<ReturnType<typeof loadFolder>>;
+  const [folder, setFolder] = useState<Folder>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; lines: string[] } | null>(null);
+  const picker = canPickFolder();
+
+  useEffect(() => {
+    if (picker) void loadFolder().then(setFolder, () => {});
+  }, []);
+
+  const run = async (job: () => Promise<string[]>) => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult({ ok: true, lines: await job() });
+    } catch (e) {
+      // Окно выбора папки закрыли — это не ошибка
+      if (e instanceof DOMException && e.name === 'AbortError') setResult(null);
+      else setResult({ ok: false, lines: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upload = (handle: NonNullable<Folder>) => async () => {
+    const r = await exportToFolder(handle);
+    const lines = [
+      r.added + r.updated + r.removed
+        ? `Готово: добавлено ${r.added}, обновлено ${r.updated}, удалено ${r.removed}. Без изменений: ${r.unchanged}.`
+        : `Всё уже выгружено: ${emotesCount(r.unchanged)}.`,
+    ];
+    if (r.skipped.length) lines.push(`Не выгружены — в папке уже есть свои файлы с такими кодами: ${r.skipped.join(', ')}`);
+    if (r.failed.length) lines.push(`Не удалось записать: ${r.failed.join(', ')}`);
+    if (r.keptWebp.length) lines.push(`Остались в WebP (браузер не смог перевести анимацию в GIF): ${r.keptWebp.join(', ')}`);
+    return lines;
+  };
+
+  return (
+    <section class="card">
+      <h2>RutonyChat</h2>
+      <p class="muted small">
+        Смайлы Owl Smile можно показать в RutonyChat — в окне чата и в чате на экране стрима. Их увидят все зрители трансляции, даже без
+        расширения. Переносятся только смайлы: иконки и эффекты ников RutonyChat не поддерживает, а BetterTTV у него свой.
+      </p>
+      <p class="muted small">
+        Папка смайлов: в RutonyChat откройте настройки чата → «Свои смайлы» → «Открыть каталог». Файлы, которые вы положили туда сами,
+        расширение не трогает.
+      </p>
+      {picker ? (
+        <>
+          <Opt title="Папка смайлов RutonyChat" hint={folder ? `Выбрана: ${folder.name}` : 'Ещё не выбрана'}>
+            <button class={folder ? 'ghost xs' : 'xs'} disabled={busy}
+              onClick={() => void run(async () => {
+                const h = await pickFolder();
+                setFolder(h);
+                return (await upload(h)()).map((l, i) => (i ? l : `Папка «${h.name}». ${l}`));
+              })}>
+              {folder ? 'Сменить' : 'Выбрать папку'}
+            </button>
+          </Opt>
+          {folder && (
+            <Opt title="Выгрузить смайлы" hint="Добавит новые, обновит изменённые и уберёт удалённые. Нажимайте перед стримом">
+              <button class="xs" disabled={busy} onClick={() => void run(upload(folder))}>{busy ? 'Выгружаю…' : 'Выгрузить'}</button>
+            </Opt>
+          )}
+        </>
+      ) : (
+        <p class="muted small">Этот браузер не умеет записывать в папку — скачайте архив и распакуйте его в папку смайлов RutonyChat.</p>
+      )}
+      <Opt title="Архивом" hint="Все смайлы одним zip: распакуйте в папку смайлов RutonyChat с заменой файлов">
+        <button class="ghost xs" disabled={busy} onClick={() => void run(async () => [`Скачан архив: ${emotesCount(await downloadZip())}.`])}>
+          Скачать zip
+        </button>
+      </Opt>
+      {result && result.lines.map((l, i) => <div key={i} class={`status ${result.ok ? 'ok' : 'err'}`} style="position:static;margin:8px 0 0">{l}</div>)}
+    </section>
+  );
+}
+
 // ——— Предпросмотр ———
 
 const svgUrl = (svg: string) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
@@ -401,7 +490,9 @@ function Preview({ s, dataRef }: { s: Settings; dataRef: { current: RenderData |
 
 // ——— Страница ———
 
-const SECTIONS = { emotes: 'Смайлы', cosmetics: 'Иконки и ники', messages: 'Сообщения', filters: 'Фильтры', picker: 'Окно смайлов', general: 'Площадки' } as const;
+const SECTIONS = {
+  emotes: 'Смайлы', cosmetics: 'Иконки и ники', messages: 'Сообщения', filters: 'Фильтры', picker: 'Окно смайлов', general: 'Площадки', rutony: 'RutonyChat',
+} as const;
 type Section = keyof typeof SECTIONS;
 
 function exportSettings(s: Settings): void {
@@ -476,7 +567,9 @@ function App() {
       </nav>
 
       <div class="layout">
-        <div class={`stack ${s.enabled ? '' : 'disabled'}`}>
+        {/* RutonyChat не зависит от того, включён ли Owl Smile в чате браузера */}
+        <div class={`stack ${s.enabled || section === 'rutony' ? '' : 'disabled'}`}>
+          {section === 'rutony' && <RutonyChat />}
           {section === 'emotes' && <Emotes s={s} update={update} />}
           {section === 'cosmetics' && <Cosmetics s={s} update={update} />}
           {section === 'messages' && <Messages s={s} update={update} />}
