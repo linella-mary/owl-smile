@@ -1,7 +1,7 @@
 {
   "name": "owl-smile",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Свои смайлы, иконки и эффекты ников для Twitch и VK Live",
   "type": "module",
   "scripts": {
