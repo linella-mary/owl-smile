@@ -252,6 +252,12 @@ function Picker({ s, update }: { s: Settings; update: Update }) {
     <section class="card">
       <h2>Окно смайлов</h2>
       <Toggle s={s} k="pickerButton" update={update} title="Кнопка 🦉 у поля ввода" />
+      {s.pickerButton && (
+        <Opt title="Где кнопка">
+          <Seg value={s.pickerPlace} onChange={(pickerPlace) => update({ pickerPlace })}
+            options={[['toolbar', 'Под полем ввода'], ['input', 'В поле ввода']]} />
+        </Opt>
+      )}
       <Toggle s={s} k="tabCompletion" update={update} title="Дополнение кода смайла по Tab" />
       <Range s={s} k="pickerEmoteSize" update={update} title="Размер смайлов в окне" />
       <Range s={s} k="recentCount" update={update} title="Недавних смайлов" format={(v) => (v ? String(v) : 'не показывать')} />

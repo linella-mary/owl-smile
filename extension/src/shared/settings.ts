@@ -58,6 +58,8 @@ export interface Settings {
 
   // Окно смайлов
   pickerButton: boolean;
+  /** Где кнопка 🦉: в панели под полем ввода или в самом поле, рядом со смайлами площадки. */
+  pickerPlace: 'toolbar' | 'input';
   tabCompletion: boolean;
   recentCount: number;
   pickerEmoteSize: number;
@@ -98,6 +100,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bots: DEFAULT_BOTS,
   filterMode: 'collapse',
   pickerButton: true,
+  pickerPlace: 'toolbar',
   tabCompletion: true,
   recentCount: 16,
   pickerEmoteSize: 28,
@@ -182,6 +185,7 @@ export function normalizeSettings(raw: unknown): Settings {
     bots: Array.isArray(r.bots) ? cleanList(r.bots, true) : [...d.bots],
     filterMode: oneOf(r.filterMode, ['hide', 'collapse'], d.filterMode),
     pickerButton: bool(r.pickerButton, d.pickerButton),
+    pickerPlace: oneOf(r.pickerPlace, ['toolbar', 'input'], d.pickerPlace),
     tabCompletion: bool(r.tabCompletion, d.tabCompletion),
     recentCount: Math.round(n('recentCount')),
     pickerEmoteSize: n('pickerEmoteSize'),

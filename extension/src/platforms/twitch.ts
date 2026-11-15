@@ -1,4 +1,4 @@
-import { textNodesIn, type ChatAdapter } from './types';
+import { textNodesIn, type ChatAdapter, outerWrapper } from './types';
 
 /**
  * Twitch (twitch.tv, popout-чат, VOD-чат).
@@ -37,5 +37,11 @@ export const twitchAdapter: ChatAdapter = {
 
   getPickerAnchor() {
     return document.querySelector('[data-a-target="emote-picker-button"]')?.closest('div') ?? null;
+  },
+
+  // Ряд под полем ввода: баллы канала слева, справа шестерёнка настроек чата и «Чат». Сова — перед шестерёнкой.
+  getPickerToolbarAnchor() {
+    const gear = document.querySelector('[data-a-target="chat-settings"]');
+    return gear ? outerWrapper(gear) : null;
   },
 };

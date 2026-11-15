@@ -53,7 +53,8 @@ export class GitflicApi {
   async uploadFile(releaseId: string, filePath: string): Promise<void> {
     const form = new FormData();
     const name = path.basename(filePath);
-    form.append('files', new Blob([fs.readFileSync(filePath)], { type: 'application/zip' }), name);
+    const type = name.endsWith('.xpi') ? 'application/x-xpinstall' : 'application/zip';
+    form.append('files', new Blob([fs.readFileSync(filePath)], { type }), name);
     await this.call('POST', `${this.base}/${releaseId}/file`, form, false);
   }
 

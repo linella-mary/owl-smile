@@ -31,6 +31,7 @@ const TWITCH_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head>
 <div class="chat-input">
   <div data-a-target="chat-input" contenteditable="true" role="textbox" style="min-height:20px;border:1px solid #555"></div>
   <div><button data-a-target="emote-picker-button">😀</button></div>
+  <div class="chat-input__buttons-container"><div>0 · 41 550</div><div class="right"><div><div><button data-a-target="chat-settings">⚙</button></div></div><button data-a-target="chat-send-button">Чат</button></div></div>
 </div>
 <script>
   // Редактор «как Slate»: текст живёт в модели и меняется только через beforeinput.
@@ -69,7 +70,7 @@ const VK_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><bod
 <div class="ChatPublisher_root_xCqwT" id="chat-pub-root"><div class="Publisher_root_OEAeu">
   <div class="Publisher_editorWrapper_ruJa3"><div class="Publisher_editor_lrEMS"><div class="codex-editor"><div class="ce-block"><div class="ce-paragraph cdx-block" contenteditable="true" style="min-height:20px;border:1px solid #555"></div></div></div></div></div>
   <div class="Publisher_actionsContainer_nXHDH"><div class="Publisher_smileContainer_MjJHi"><button>☺</button></div></div>
-</div></div>
+</div><div class="ChatPublisher_footer_e2e"><div>4,7K</div><div class="ChatPublisher_actions_e2e"><button>🚀</button><div><button>⚙</button></div></div></div></div>
 <script>
   // Как VK в режиме ответа: нажатие мыши вне блока ввода отменяет ответ и стирает набранный текст
   // (жалоба 14.11.2026: окно смайлов совы было вне блока, и выбор смайла сбрасывал ответ).
@@ -340,7 +341,9 @@ async function main() {
     check('новое сообщение (MutationObserver)', Boolean(await waitFor(async () => (await page.$$('[data-a-user="someone"] img.owl-emote')).length === 2)));
     check('чужой ник без оформления', !(await page.$('[data-a-user="someone"] .owl-paint, [data-a-user="someone"] .owl-badges')));
 
-    // 3. Кнопка смайлов → вставка в поле ввода
+    // 3. Кнопка смайлов (по умолчанию — под полем ввода, перед шестерёнкой) → вставка в поле ввода
+    const nextToOwl = (p: Page) => p.evaluate(() => document.getElementById('owl-picker-btn')?.nextElementSibling?.textContent ?? '');
+    check('Twitch: кнопка под полем ввода, перед шестерёнкой', Boolean(await waitFor(async () => (await nextToOwl(page)) === '⚙')), await nextToOwl(page));
     await page.click('#owl-picker-btn');
     if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-picker.png') });
     await page.locator('button[title="CatJam"]').click();
@@ -450,7 +453,11 @@ async function main() {
     check('VK, настройки: Twitch получил свой размер', Boolean(await waitFor(async () => (await emoteHeight()) === 20, 5000)), `${await emoteHeight()} px`);
     await setPrefs(sw, null);
     check('VK, настройки: сброс', Boolean(await waitFor(async () => !(await vk.$('.owl-collapsed')) && (await vkEmoteH()) === 32, 5000)));
-    check('VK: кнопка смайлов рядом с их смайлами', Boolean(await waitFor(() => vk.$('#owl-picker-btn + [class*="Publisher_smileContainer_"]'))));
+    check('VK: кнопка под полем ввода, между ракетой и шестерёнкой', Boolean(await waitFor(async () => (await nextToOwl(vk)) === '⚙')), await nextToOwl(vk));
+    await setPrefs(sw, { pickerPlace: 'input' });
+    check('VK: настройка «в поле ввода» — рядом с их смайлами', Boolean(await waitFor(() => vk.$('#owl-picker-btn + [class*="Publisher_smileContainer_"]'), 5000)));
+    await setPrefs(sw, { pickerPlace: 'toolbar' });
+    check('VK: и обратно под поле', Boolean(await waitFor(async () => (await nextToOwl(vk)) === '⚙', 5000)));
     await vk.click('#owl-picker-btn');
     check('VK: «Недавние» помнят смайл из Twitch', Boolean(await vk.$('text=Недавние')));
     await vk.locator('button[title="CatJam"]').first().click();

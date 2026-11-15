@@ -18,6 +18,11 @@ export interface ChatAdapter {
   /** Элемент, рядом с которым ставится кнопка смайлов. */
   getPickerAnchor(): Element | null;
   /**
+   * Место в панели под полем ввода (настройка «под полем ввода»): перед каким элементом ставить кнопку.
+   * null — панели нет (не вошли, другая вёрстка): кнопка остаётся у поля ввода.
+   */
+  getPickerToolbarAnchor?(): Element | null;
+  /**
    * Куда вставлять окно смайлов (по умолчанию — в body). Нужно, если площадка считает клик вне своего
    * блока ввода «кликом мимо» и что-то сбрасывает (VK Live в режиме ответа стирал ответ и текст).
    */
@@ -39,4 +44,13 @@ export function textNodesIn(roots: Iterable<Element>): Text[] {
     for (let n = walker.nextNode(); n; n = walker.nextNode()) out.push(n as Text);
   }
   return out;
+}
+
+/**
+ * Самая внешняя обёртка элемента, в которой больше ничего нет (div > div > button → внешний div):
+ * кнопку ставим её соседом в общем ряду, а не внутрь чужой обёртки — так не ломается их вёрстка.
+ */
+export function outerWrapper(el: Element): Element {
+  while (el.parentElement && el.parentElement.childElementCount === 1 && el.parentElement !== document.body) el = el.parentElement;
+  return el;
 }

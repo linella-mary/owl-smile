@@ -1,5 +1,5 @@
 import { normalizeNick } from '../shared/ids';
-import { textNodesIn, type ChatAdapter } from './types';
+import { outerWrapper, textNodesIn, type ChatAdapter } from './types';
 
 /**
  * VK Live (live.vkvideo.ru). Разметка снята с живой страницы 2026-11-12.
@@ -58,5 +58,18 @@ export const vkliveAdapter: ChatAdapter = {
       document.querySelector('[class*="ChatPublisher_smileSelector_"]') ??
       document.querySelector('[class*="Publisher_sendContainer_"]')
     );
+  },
+
+  // Ряд под полем ввода: баллы канала слева, справа ракета и шестерёнка. Классы ряда неизвестны, поэтому
+  // ищем последнюю кнопку блока ввода, стоящую после рамки поля (не панель ответа над полем). Сова — перед ней.
+  getPickerToolbarAnchor() {
+    const root = document.getElementById('chat-pub-root') ?? document.querySelector('[class*="ChatPublisher_root_"]');
+    const box = root?.querySelector('[class*="Publisher_root_"]');
+    if (!root || !box) return null;
+    const after = [...root.querySelectorAll('button')].filter(
+      (b) => b.id !== 'owl-picker-btn' && !box.contains(b) && box.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    const last = after.at(-1);
+    return last ? outerWrapper(last) : null;
   },
 };

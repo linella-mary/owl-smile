@@ -226,8 +226,15 @@ export class EmotePicker {
       this.dispose();
       return;
     }
-    if (document.getElementById(BTN_ID)) return;
-    const anchor = this.adapter.getPickerAnchor();
+    // «Под полем ввода» — в панели площадки; пока её нет (ещё не отрисована, не вошли) — у поля ввода,
+    // а когда появится, кнопка переедет (вызывается на каждое изменение DOM).
+    const anchor =
+      (s.pickerPlace === 'toolbar' ? this.adapter.getPickerToolbarAnchor?.() : null) ?? this.adapter.getPickerAnchor();
+    const existing = document.getElementById(BTN_ID);
+    if (existing) {
+      if (anchor && existing.nextElementSibling !== anchor) anchor.before(existing);
+      return;
+    }
     if (!anchor) return;
     const btn = document.createElement('button');
     btn.id = BTN_ID;

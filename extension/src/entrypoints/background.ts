@@ -19,8 +19,10 @@ const PERIOD_MIN = 15;
 
 /** Значок расширения: «off», когда Owl Smile выключен в чате. */
 function showEnabled(s: Settings): void {
-  void browser.action.setBadgeText({ text: s.enabled ? '' : 'off' });
-  void browser.action.setBadgeBackgroundColor({ color: '#53535f' });
+  // Firefox собирается на Manifest V2 — там вместо action старый browserAction
+  const action = browser.action ?? browser.browserAction;
+  void action.setBadgeText({ text: s.enabled ? '' : 'off' });
+  void action.setBadgeBackgroundColor({ color: '#53535f' });
 }
 
 /** Ставит content scripts из манифеста во все открытые подходящие вкладки. */
@@ -52,7 +54,8 @@ export default defineBackground(() => {
     void bttv.refreshAll();
     // После установки/обновления в уже открытых вкладках нашего скрипта нет (или он «осиротел») —
     // ставим сами, чтобы не нужно было обновлять страницу.
-    if (reason === 'install' || reason === 'update') void injectIntoOpenTabs();
+    // Firefox ставит скрипты в открытые вкладки сам — второй экземпляр рисовал бы всё дважды.
+    if ((reason === 'install' || reason === 'update') && !import.meta.env.FIREFOX) void injectIntoOpenTabs();
   });
 
   // Главный выключатель: горячая клавиша (Alt+Shift+O по умолчанию) и значок на панели

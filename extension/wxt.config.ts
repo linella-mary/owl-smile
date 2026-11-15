@@ -16,6 +16,26 @@ export default defineConfig({
     // Зависимости isomorphic-git ищут `global`/`window`, которых нет в сервис-воркере MV3.
     define: { global: 'globalThis' },
   }),
+  // Исходники для проверки Mozilla (npm run zip:firefox → *-sources.zip): без секретов и сборок
+  zip: {
+    excludeSources: ['.env', '.env.*', '.output/**', '.output-e2e/**', '.wxt/**', '.spike/**', 'test-results/**', '**/*.log'],
+  },
+  // Firefox: постоянный id нужен для подписи Mozilla и storage.sync. Менять нельзя — обновления не встанут.
+  // Хуком, а не функцией в manifest: с функцией не запускались тесты (плагин WXT для vitest).
+  hooks: {
+    'build:manifestGenerated': (wxt, manifest) => {
+      if (wxt.config.browser !== 'firefox') return;
+      manifest.browser_specific_settings = {
+        gecko: {
+          id: 'owl-smile@gitflic.ru',
+          // 140 — ESR; с неё же Firefox понимает data_collection_permissions и popover для окна смайлов
+          strict_min_version: '140.0',
+          // Расширение ничего не собирает: в общую базу уходит только то, что человек сам загрузил
+          data_collection_permissions: { required: ['none'] },
+        },
+      } as typeof manifest.browser_specific_settings;
+    },
+  },
   manifest: {
     name: 'Owl Smile',
     description: 'Свои смайлы, иконки и эффекты ников в чатах Twitch и VK Live',

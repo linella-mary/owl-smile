@@ -7,13 +7,16 @@
  * 2. ставит версию в package.json (если указана) и коммитит;
  * 3. собирает zip и проверяет, что в сборку не попал ни один токен из .env;
  * 4. ставит тег vX.Y.Z и пушит ветку и тег в проект с кодом (обычными учётными данными git);
- * 5. создаёт релиз через API GitFlic и прикрепляет zip.
+ * 5. создаёт релиз через API GitFlic и прикрепляет zip (и .xpi для Firefox).
  *
  * Нужны в .env: WXT_GITFLIC_OWNER, GITFLIC_CODE_REPO, GITFLIC_API_TOKEN (личный API-токен GitFlic).
+ * Если заданы AMO_JWT_ISSUER и AMO_JWT_SECRET — ещё собирает и подписывает в Mozilla версию для Firefox
+ * (scripts/firefox.ts); без них релиз выходит только для Chrome.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildAndSignFirefox, secretValues } from './firefox';
 import { GitflicApi } from './gitflic-api';
 
 if (fs.existsSync('.env')) process.loadEnvFile('.env');
@@ -61,9 +64,7 @@ async function main() {
   console.log(`• Сборка ${version}…`);
   execFileSync('npx', ['wxt', 'zip'], { stdio: 'inherit', shell: true });
   const outDir = path.resolve('.output');
-  const secrets = Object.entries(process.env)
-    .filter(([k, v]) => /TOKEN/.test(k) && v && v.length >= 8)
-    .map(([, v]) => v!);
+  const secrets = secretValues();
   for (const f of fs.readdirSync(path.join(outDir, 'chrome-mv3'), { recursive: true })) {
     const p = path.join(outDir, 'chrome-mv3', String(f));
     if (fs.statSync(p).isFile() && secrets.some((s) => fs.readFileSync(p, 'latin1').includes(s)))
@@ -74,6 +75,18 @@ async function main() {
   const zipName = `owl-smile-${version}.zip`;
   fs.copyFileSync(path.join(outDir, built), path.join(outDir, zipName));
   console.log(`✔ ${zipName}, токенов в сборке нет`);
+
+  // 3б. Firefox — до тега и push: если Mozilla откажет, выпуск ещё можно повторить с той же версией
+  let xpiPath: string | null = null;
+  if (process.env.AMO_JWT_ISSUER && process.env.AMO_JWT_SECRET) {
+    try {
+      xpiPath = buildAndSignFirefox(version);
+    } catch (e) {
+      fail(`Firefox: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else {
+    console.log('• Firefox пропущен: нет AMO_JWT_ISSUER и AMO_JWT_SECRET в .env');
+  }
 
   // 4. Тег и push кода (токеном развёртывания проекта, если задан; иначе — учётными данными git)
   git('tag', '-a', tag, '-m', `Owl Smile ${version}`);
@@ -94,7 +107,8 @@ async function main() {
   1. https://gitflic.ru/project/${owner}/${codeRepo}/release → «Создать релиз»
   2. Тег: ${tag}, название: Owl Smile ${version}
   3. Описание: ${description.replace(/\n+/g, ' ')}
-  4. Прикрепите файл: ${path.join(outDir, zipName)}`);
+  4. Прикрепите файл: ${path.join(outDir, zipName)}${xpiPath ? `
+     и файл для Firefox: ${xpiPath}` : ''}`);
     return;
   }
 
@@ -102,8 +116,10 @@ async function main() {
   const api = new GitflicApi(apiToken, owner, codeRepo);
   const id = await api.createRelease({ tag, title: `Owl Smile ${version}`, description });
   await api.uploadFile(id, path.join(outDir, zipName));
+  if (xpiPath) await api.uploadFile(id, xpiPath);
   const files = await api.files(id);
   if (!files.some((f) => f.name === zipName)) fail('Файл не появился в релизе — проверьте страницу релизов');
+  if (xpiPath && !files.some((f) => f.name === path.basename(xpiPath!))) fail('Файл для Firefox не появился в релизе — проверьте страницу релизов');
 
   console.log(`\n✔ Релиз ${tag} опубликован: https://gitflic.ru/project/${owner}/${codeRepo}/release`);
   for (const f of files) console.log(`  скачать без входа: ${f.downloadUrl}`);
