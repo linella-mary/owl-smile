@@ -85,7 +85,7 @@
 
 ## Owl Smile в OBS
 
-Плагин для OBS Studio 30+ на Windows добавляет в OBS доки с чатами **Twitch** и **VK Live**. В них видны смайлы, иконки и эффекты ников Owl Smile, работают кнопка 🦉 и Tab. Писать в чат можно прямо из дока.
+Плагин для OBS Studio 31.1 и новее на Windows добавляет в OBS доки с чатами **Twitch** и **VK Live**. В них видны смайлы, иконки и эффекты ников Owl Smile, работают кнопка 🦉 и Tab. Писать в чат можно прямо из дока.
 
 1. Скачайте со [страницы релизов](https://gitflic.ru/project/ju1iana/owl-smile/release) файл `owl-smile-obs-X.Y.Z.zip`.
 2. Закройте OBS и распакуйте архив в папку `C:\ProgramData\obs-studio\plugins` — должна получиться папка `C:\ProgramData\obs-studio\plugins\owl-smile`.
