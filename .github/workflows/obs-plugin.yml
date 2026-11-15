@@ -31,7 +31,8 @@ jobs:
       - name: Бандл для доков (owl-obs.js)
         working-directory: extension
         run: |
-          npm ci --ignore-scripts
+          # postinstall (wxt prepare) создаёт .wxt/tsconfig.json — на него ссылается tsconfig.json
+          npm ci
           npm run build:obs
 
       - name: Шаблон плагина и наши исходники
