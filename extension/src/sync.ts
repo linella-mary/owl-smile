@@ -2,7 +2,7 @@ import { getRepo } from './git/browser-repo';
 import { commitIndex, getIndex, getStoredImageOids, setStatus } from './shared/cache';
 import { isConfigured } from './shared/config';
 import { mimeByPath, toDataUrl } from './shared/bytes';
-import { buildIndex } from './shared/snapshot';
+import { buildIndex, dropImages, MAX_IMAGE_BYTES } from './shared/snapshot';
 
 export interface SyncResult {
   ok: boolean;
@@ -42,9 +42,15 @@ async function doSync(force: boolean): Promise<SyncResult> {
 
     const stored = new Set(await getStoredImageOids());
     const fresh: Record<string, string> = {};
+    const tooBig = new Set<string>();
     for (const [oid, path] of need) {
-      if (!stored.has(oid)) fresh[oid] = toDataUrl(await repo.readBlob(oid), mimeByPath(path));
+      if (stored.has(oid)) continue;
+      const bytes = await repo.readBlob(oid);
+      if (bytes.length > MAX_IMAGE_BYTES) tooBig.add(oid);
+      else fresh[oid] = toDataUrl(bytes, mimeByPath(path));
     }
+    if (tooBig.size) console.warn('[owl] пропущены слишком большие картинки:', [...tooBig].map((oid) => need.get(oid)));
+    dropImages(index, need, tooBig);
     await commitIndex(index, fresh, new Set(need.keys()));
     // Удалённые из репозитория картинки и старые pack-файлы не должны копиться в IndexedDB
     await repo.compactIfBloated().catch((e) => console.warn('[owl] не удалось пересобрать локальную копию', e));

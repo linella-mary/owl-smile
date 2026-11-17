@@ -6,7 +6,7 @@ import { getWriteRepo } from '../../git/browser-repo';
 import { K_INDEX, getImages, getIndex, type LocalIndex } from '../../shared/cache';
 import { requestSync } from '../../shared/messages';
 import { ConflictError } from '../../git/repo';
-import { UserError } from '../ops';
+import { allowed, UserError, type Mutation } from '../ops';
 
 /** Данные из локального кэша + картинки (oid → data URL). */
 export interface CacheView {
@@ -61,7 +61,7 @@ export interface RunState {
 
 export interface Runner extends RunState {
   /** Применить изменение к репозиторию и синхронизировать. Возвращает true при успехе. */
-  run(title: string, mutation: (snap: Snapshot) => Changes): Promise<boolean>;
+  run(title: string, mutation: Mutation): Promise<boolean>;
   /** Показать ошибку проверки формы (до записи). Возвращает false. */
   fail(e: unknown): Promise<boolean>;
 }
@@ -69,7 +69,8 @@ export interface Runner extends RunState {
 export const RunnerContext = createContext<Runner | null>(null);
 export const useRunner = () => useContext(RunnerContext)!;
 
-export function useRunnerState(author: string): Runner {
+/** `admin` — вошёл ли админ: админские изменения (Mutation.adminOnly) остальным не выполняются. */
+export function useRunnerState(author: string, admin: boolean): Runner {
   const [state, setState] = useState<RunState>({ busy: false, message: null });
   return useMemo(
     () => ({
@@ -82,6 +83,10 @@ export function useRunnerState(author: string): Runner {
       async run(title, mutation) {
         if (!author.trim()) {
           setState({ busy: false, message: { kind: 'err', text: 'Сначала укажите свой ник вверху страницы' } });
+          return false;
+        }
+        if (!allowed(mutation, { nick: author, admin })) {
+          setState({ busy: false, message: { kind: 'err', text: 'Это может только админ' } });
           return false;
         }
         setState({ busy: true, message: { kind: 'info', text: `${title}…` } });
@@ -101,7 +106,7 @@ export function useRunnerState(author: string): Runner {
         }
       },
     }),
-    [state, author],
+    [state, author, admin],
   );
 }
 

@@ -5,6 +5,7 @@
  * Запуск: npm run e2e
  */
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -21,7 +22,14 @@ const IMG = 'img/0123456789abcdef.webp';
 const emote = (code: string) =>
   JSON.stringify({ code, image: IMG, animated: false, w: 28, h: 28, author: 'seed', createdAt: '2026-11-12T00:00:00.000Z' });
 
-const TWITCH_FIXTURE = `<!doctype html><html><head><meta charset="utf-8"></head><body style="background:#18181b;color:#fff">
+const TWITCH_FIXTURE = `<!doctype html><html><head><meta charset="utf-8">
+<style>
+  /* Ряд под полем ввода — как у Twitch: баллы слева, справа кнопки; при нехватке места кнопки переносятся */
+  .chat-input { width: 340px; margin-top: 200px; } /* ниже карточки зрителя, которая остаётся открытой между шагами */
+  .chat-input__buttons-container { display: flex; justify-content: space-between; align-items: center; }
+  .chat-input__buttons-container .right { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chat-input__buttons-container .right div { display: flex; align-items: center; }
+</style></head><body style="background:#18181b;color:#fff">
 <div class="chat-scrollable-area__message-container" id="chat">
   <div class="chat-line__message" data-a-user="owl_viewer">
     <span class="chat-line__username-container"><span class="chat-line__username"><span class="chat-author__display-name">Owl_Viewer</span></span></span>
@@ -120,6 +128,10 @@ function countGifFrames(b: Buffer): number {
   for (let i = 13; i < b.length - 3; i++) if (b[i] === 0x21 && b[i + 1] === 0xf9 && b[i + 2] === 0x04) n++;
   return n;
 }
+
+/** Админ страницы загрузки (в сборку попадает только отпечаток ключа). */
+const ADMIN_NICK = 'owl-admin';
+const ADMIN_KEY = 'e2e-admin-key-0123456789abcdef0123456789';
 
 let failures = 0;
 function check(name: string, ok: boolean, extra = '') {
@@ -242,6 +254,8 @@ async function main() {
       WXT_GITFLIC_REPO: 'data',
       WXT_GITFLIC_BRANCH: 'master',
       WXT_GITFLIC_USER: 'tester',
+      WXT_ADMIN_NICK: ADMIN_NICK,
+      WXT_ADMIN_KEY_SHA256: createHash('sha256').update(ADMIN_KEY).digest('hex'),
     },
   });
   const ext = path.resolve('.output-e2e/chrome-mv3');
@@ -364,6 +378,27 @@ async function main() {
     check('Twitch: кнопку старого экземпляра заменяет своя', Boolean(await waitFor(async () =>
       (await page.$$eval('#owl-picker-btn', (b) => b.map((x) => x.textContent).join())) === '🦉' && (await nextToOwl(page)) === '⚙', 5000)),
       await page.$$eval('#owl-picker-btn', (b) => b.map((x) => x.textContent).join()));
+    // Модератор: в ряду ещё щит и меч, с совой ряд не помещается — сова уходит к полю ввода (жалоба 17.11.2026).
+    // Отдельная вкладка: до перезагрузки сова там остаётся у поля ввода, а основной странице нужна обычная раскладка
+    const modPage = await ctx.newPage();
+    await modPage.goto('https://www.twitch.tv/somechannel');
+    await waitFor(async () => (await nextToOwl(modPage)) === '⚙');
+    await modPage.evaluate(() => {
+      const gearWrap = document.querySelector('[data-a-target="chat-settings"]')!.parentElement!.parentElement!;
+      for (const t of ['🛡 модерация', '🗡 баны']) {
+        const b = document.createElement('button');
+        b.textContent = t;
+        b.style.cssText = 'width: 110px; flex-shrink: 0';
+        gearWrap.before(b);
+      }
+      // Как на снимке из жалобы: ряд не поместился, «Чат» на своей строке
+      document.querySelector<HTMLElement>('.chat-input__buttons-container .right')!.style.cssText = 'display: flex; flex-wrap: wrap';
+      document.querySelector<HTMLElement>('[data-a-target="chat-send-button"]')!.style.flexBasis = '100%';
+      document.getElementById('owl-picker-btn')!.remove(); // поставится заново — уже с модераторскими кнопками
+    });
+    check('Twitch: у модератора сова уходит к полю ввода, «Чат» не переносится', Boolean(await waitFor(async () => (await nextToOwl(modPage)) === '😀', 5000)), await nextToOwl(modPage));
+    await modPage.close();
+    await page.bringToFront(); // в фоновой вкладке Chromium тормозит кадры, и нажатия Playwright ждут бесконечно
     await page.click('#owl-picker-btn');
     if (process.env.SHOTS) await page.screenshot({ path: path.join(process.env.SHOTS, 'twitch-picker.png') });
     await page.locator('button[title="CatJam"]').click();
@@ -679,6 +714,26 @@ async function main() {
     await manage.click('.key-form button');
     check('верный ключ принят', Boolean(await waitFor(() => manage.$('nav.tabs'))));
     check('ключ не попал в сборку', !fs.readdirSync(ext, { recursive: true }).some((f) => /\.(js|html|json)$/.test(String(f)) && fs.readFileSync(path.join(ext, String(f)), 'utf8').includes(TEST_KEY)));
+    // storage.local читают и скрипты на страницах чата — ключа там быть не должно
+    const local = await sw.evaluate(() =>
+      (globalThis as unknown as { chrome: { storage: { local: SyncArea } } }).chrome.storage.local.get(null),
+    );
+    check('ключ не лежит в storage.local', !JSON.stringify(local).includes(TEST_KEY));
+
+    // Админ: без входа — только смайлы, чужие смайлы (seed) не трогать; после входа — все вкладки
+    const tabCount = () => manage.$$eval('nav.tabs button', (b) => b.length);
+    check('без входа админа — только вкладка «Смайлы»', (await tabCount()) === 1);
+    await waitFor(() => manage.$('.tile:has-text("CatJam")'));
+    check('у чужого смайла нет кнопок удаления и переименования', !(await manage.$('.tile:has-text("CatJam") .tile-actions')));
+    await manage.click('text=Вход админа');
+    await manage.fill('input[placeholder="Ник админа"]', ADMIN_NICK);
+    await manage.fill('input[placeholder="Ключ админа"]', 'wrong');
+    await manage.click('button:text-is("Войти")');
+    check('неверный ключ админа отклонён', Boolean(await waitFor(() => manage.$('text=Ник или ключ админа не подошли'))));
+    await manage.fill('input[placeholder="Ключ админа"]', ADMIN_KEY);
+    await manage.click('button:text-is("Войти")');
+    check('после входа админа — все вкладки', Boolean(await waitFor(async () => (await tabCount()) === 5)));
+    check('у чужого смайла админу видны кнопки', Boolean(await manage.$('.tile:has-text("CatJam") .tile-actions')));
     await manage.fill('header input', 'e2e-tester');
     await manage.setInputFiles('.drop input[type=file]', { name: 'owl.png', mimeType: 'image/png', buffer: PNG_1x1 });
     await manage.waitForSelector('.drop img');

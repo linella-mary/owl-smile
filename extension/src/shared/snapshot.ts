@@ -54,6 +54,22 @@ export interface FileSource {
 
 const dec = new TextDecoder();
 
+/**
+ * Предел картинки при чтении базы. Страница загрузки делает картинки в десятки КБ (анимация — до 512 КБ),
+ * но в базу можно записать и обычным git в обход неё. Картинка больше предела не сохраняется,
+ * а смайл, иконка или подложка с ней пропускаются.
+ */
+export const MAX_IMAGE_BYTES = 1024 * 1024;
+
+/** Убирает из индекса всё, что ссылается на картинки `ids` (слишком большие). */
+export function dropImages(index: LocalIndex, need: Map<string, string>, ids: Set<string>): void {
+  if (!ids.size) return;
+  for (const [code, e] of Object.entries(index.emotes)) if (ids.has(e.img)) delete index.emotes[code];
+  for (const [id, b] of Object.entries(index.badges)) if (ids.has(b.img)) delete index.badges[id];
+  for (const [id, n] of Object.entries(index.nameplates ?? {})) if (n.img && ids.has(n.img)) delete index.nameplates![id];
+  for (const id of ids) need.delete(id);
+}
+
 async function readJsonDir<T>(
   src: FileSource,
   dirPath: string,

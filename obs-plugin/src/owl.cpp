@@ -33,6 +33,7 @@
 #include <QVBoxLayout>
 
 #include <atomic>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -41,16 +42,16 @@
 namespace {
 
 const char *DATA_URL = "https://gitflic.ru/project/ju1iana/owl-smile-data/file/downloadAll?branch=master&format=zip";
+/* Список веток git (несколько сотен байт, без входа): по хешу ветки видно, изменилась ли база,
+ * и весь архив качается только тогда. GitFlic не отдаёт ETag/Last-Modified для архива. */
+const char *REFS_URL = "https://gitflic.ru/project/ju1iana/owl-smile-data.git/info/refs?service=git-upload-pack";
+const char *DATA_BRANCH_REF = " refs/heads/master";
+const size_t MAX_REFS_BYTES = 64 * 1024;
 const int SYNC_MINUTES = 15;
-const size_t MAX_ZIP_BYTES = 64 * 1024 * 1024;
+/* База вшивается в скрипт каждой страницы дока (в base64 — на треть больше), поэтому предел скромный;
+ * распакованная база ограничена в бандле (MAX_UNZIPPED_BYTES в src/obs/zip-data.ts). */
+const size_t MAX_ZIP_BYTES = 16 * 1024 * 1024;
 const char *COOKIES = "owl_smile_cookies";
-
-/* Страницы входа, которые должны открываться внутри OBS, а не в обычном браузере:
- * иначе вход окажется в браузере, а док останется без него. */
-const char *LOGIN_POPUPS[] = {
-	"https://id.vk.com", "https://login.vk.com", "https://oauth.vk.com", "https://vk.com/login",
-	"https://live.vkvideo.ru", "https://www.twitch.tv/login", "https://passport.twitch.tv",
-};
 
 QString tr8(const char *s)
 {
@@ -90,6 +91,20 @@ bool write_file(const std::string &path, const std::string &data)
 }
 
 /* «https://www.twitch.tv/Name», «twitch.tv/name/», «Name» → «name». Пусто — не канал. */
+/* Хеш ветки базы из ответа info/refs (строки «<40 hex> refs/heads/master»). Пусто — не нашли. */
+std::string data_head(const std::string &refs)
+{
+	for (size_t at = refs.find(DATA_BRANCH_REF); at != std::string::npos; at = refs.find(DATA_BRANCH_REF, at + 1)) {
+		size_t end = at + strlen(DATA_BRANCH_REF);
+		if (at < 40 || (end < refs.size() && refs[end] != '\n' && refs[end] != '\0'))
+			continue;
+		std::string sha = refs.substr(at - 40, 40);
+		if (sha.find_first_not_of("0123456789abcdef") == std::string::npos)
+			return sha;
+	}
+	return std::string();
+}
+
 std::string twitch_login(const QString &raw)
 {
 	QString s = raw.trimmed();
@@ -124,8 +139,10 @@ Settings load_settings()
 	Settings s;
 	OBSDataAutoRelease data = obs_data_create_from_json_file_safe(config_file("settings.json").c_str(), "bak");
 	if (data) {
-		s.twitch = obs_data_get_string(data, "twitch");
-		s.vk = obs_data_get_string(data, "vk");
+		// Файл могли испортить или поправить руками: логин канала вставляется в текст скрипта
+		// и в адрес дока, поэтому проверяется так же, как в окне настроек
+		s.twitch = twitch_login(QString::fromUtf8(obs_data_get_string(data, "twitch")));
+		s.vk = vk_channel(QString::fromUtf8(obs_data_get_string(data, "vk")));
 	}
 	return s;
 }
@@ -161,7 +178,7 @@ private:
 	void applySettings();
 	void ensureDock(Dock &d, const std::string &url);
 	void syncNow();
-	void onDownloaded(const std::string &zip, const std::string &error);
+	void onDownloaded(const std::string &zip, const std::string &error, const std::string &head, bool unchanged);
 	QString statusText() const;
 
 	QCef *cef = nullptr;
@@ -173,6 +190,7 @@ private:
 	Settings settings;
 	std::string bundle;
 	std::string zipBase64;
+	std::string zipHead; // хеш ветки базы, из которой скачан архив (пусто — неизвестен)
 	size_t zipSize = 0;
 	QDateTime zipTime;
 	QString lastError;
@@ -189,7 +207,7 @@ Owl owl;
 
 std::string Owl::startupScript() const
 {
-	// Логин канала уже проверен (только [a-z0-9_]) — его можно вставить в строку как есть
+	// Логин канала проверен и в окне настроек, и при чтении файла (только [a-z0-9_]) — его можно вставить как есть
 	std::string s = "window.__owlConfig={twitchChannel:\"" + settings.twitch + "\"};\n";
 	s += bundle;
 	s += "\n;";
@@ -227,10 +245,13 @@ void Owl::ensureDock(Dock &d, const std::string &url)
 			d.container = nullptr;
 			return;
 		}
+		/* Всплывающие окна (вход VK и Twitch, ссылки) — окнами OBS с общими cookies, как в обычных доках.
+		 * Список разрешённых адресов (add_popup_whitelist_url) не годится: obs-browser сравнивает адрес
+		 * целиком, а у страниц входа он всегда с параметрами. Без этого вход уходит в обычный браузер
+		 * и виснет там белой страницей. Вызов — до показа: obs-browser читает флаг один раз при создании. */
+		d.browser->allowAllPopups(true);
 		d.browser->setStartupScript(startupScript());
 		layout->addWidget(d.browser);
-		for (const char *p : LOGIN_POPUPS)
-			cef->add_popup_whitelist_url(p, d.container);
 		obs_frontend_add_dock_by_id(d.id, d.title, d.container);
 	} else if (url != d.url) {
 		d.browser->setStartupScript(startupScript());
@@ -274,6 +295,7 @@ void Owl::start()
 		zipBase64 = QByteArray::fromStdString(cached).toBase64().toStdString();
 		zipSize = cached.size();
 		zipTime = QFileInfo(QString::fromStdString(config_file("data.zip"))).lastModified();
+		read_file(config_file("data.head"), zipHead);
 	}
 
 	settings = load_settings();
@@ -295,6 +317,8 @@ void Owl::stop()
 {
 	if (timer)
 		timer->stop();
+	// Идущее скачивание прерывается, а не дожидается таймаутов (до минуты и больше) — иначе OBS не закроется
+	http_cancel_all();
 	if (worker.joinable())
 		worker.join();
 	if (cookies)
@@ -307,8 +331,18 @@ void Owl::syncNow()
 		return;
 	if (worker.joinable())
 		worker.join();
-	worker = std::thread([] {
-		std::string body, error;
+	// Хеш и наличие архива — копии для потока: поля меняются только в основном потоке
+	worker = std::thread([known = zipHead, haveZip = !zipBase64.empty()] {
+		std::string refs, error;
+		std::string head = http_get(REFS_URL, refs, error, MAX_REFS_BYTES) ? data_head(refs) : std::string();
+		if (!head.empty() && head == known && haveZip) {
+			QMetaObject::invokeMethod(
+				qApp, [head] { owl.onDownloaded(std::string(), std::string(), head, true); }, Qt::QueuedConnection);
+			return;
+		}
+		// База изменилась или хеш не узнали — качаем архив: сбой проверки не должен мешать обновлению
+		std::string body;
+		error.clear();
 		bool ok = http_get(DATA_URL, body, error, MAX_ZIP_BYTES);
 		if (ok && (body.size() < 4 || body.compare(0, 2, "PK") != 0)) {
 			ok = false;
@@ -317,18 +351,25 @@ void Owl::syncNow()
 		if (!ok)
 			body.clear();
 		QMetaObject::invokeMethod(
-			qApp, [body = std::move(body), error] { owl.onDownloaded(body, error); }, Qt::QueuedConnection);
+			qApp, [body = std::move(body), error, head] { owl.onDownloaded(body, error, head, false); },
+			Qt::QueuedConnection);
 	});
 }
 
-void Owl::onDownloaded(const std::string &zip, const std::string &error)
+void Owl::onDownloaded(const std::string &zip, const std::string &error, const std::string &head, bool unchanged)
 {
 	downloading = false;
-	if (zip.empty()) {
+	if (unchanged) {
+		lastError.clear();
+		zipTime = QDateTime::currentDateTime();
+	} else if (zip.empty()) {
 		lastError = QString::fromStdString(error);
 		obs_log(LOG_WARNING, "база не скачалась: %s", error.c_str());
 	} else {
 		lastError.clear();
+		// Архив мог успеть обновиться после запроса хеша — тогда в следующий раз скачается ещё раз, не страшно
+		zipHead = head;
+		write_file(config_file("data.head"), head);
 		std::string b64 = QByteArray::fromStdString(zip).toBase64().toStdString();
 		zipTime = QDateTime::currentDateTime();
 		if (b64 != zipBase64) {

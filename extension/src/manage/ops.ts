@@ -40,15 +40,45 @@ export interface PreparedImage {
 
 export class UserError extends Error {}
 
-export type Mutation = (snap: Snapshot) => Changes;
+/** Изменение базы. `adminOnly` — только для админа (проверяет исполнитель на странице загрузки). */
+export type Mutation = ((snap: Snapshot) => Changes) & { adminOnly?: boolean };
+
+/**
+ * Кто вносит изменение: ник со страницы загрузки и вошёл ли он как админ.
+ * Это защита от случайных правок, а не от умысла: общий ключ записи позволяет менять базу и в обход расширения.
+ */
+export interface Actor {
+  nick: string;
+  admin: boolean;
+}
+
+/** Помечает изменение как админское. */
+function adminOnly(m: Mutation): Mutation {
+  m.adminOnly = true;
+  return m;
+}
+
+/** Можно ли выполнить изменение. Обычному пользователю — только не-админские. */
+export function allowed(m: Mutation, actor: Actor): boolean {
+  return actor.admin || !m.adminOnly;
+}
+
+/** Смайл свой, если подпись автора совпадает с ником (без учёта регистра). */
+function checkOwnEmote(e: Emote, actor: Actor | undefined): void {
+  if (!actor || actor.admin) return;
+  if (e.author.trim().toLowerCase() !== actor.nick.trim().toLowerCase())
+    throw new UserError(`Смайл ${e.code} загрузил ${e.author}: менять и удалять чужие смайлы может только админ`);
+}
 
 /** Несколько изменений одним коммитом (каждое видит исходный снимок — они должны писать разные файлы). */
 export function combine(...mutations: Mutation[]): Mutation {
-  return (snap) => {
+  const m: Mutation = (snap) => {
     const out: Changes = new Map();
-    for (const m of mutations) for (const [k, v] of m(snap)) out.set(k, v);
+    for (const x of mutations) for (const [k, v] of x(snap)) out.set(k, v);
     return out;
   };
+  if (mutations.some((x) => x.adminOnly)) m.adminOnly = true;
+  return m;
 }
 
 function findCodeCI(snap: Snapshot, code: string): string | undefined {
@@ -95,35 +125,54 @@ export function addEmote(code: string, img: PreparedImage, author: string): Muta
   };
 }
 
-export function renameEmote(from: string, to: string): Mutation {
+/** `actor` — кто переименовывает: обычный пользователь может только свой смайл (без actor — без проверки). */
+export function renameEmote(from: string, to: string, actor?: Actor): Mutation {
   checkCode(to);
   return (snap) => {
     const e = snap.emotes[from];
     if (!e) throw new UserError(`Смайл «${from}» не найден`);
+    checkOwnEmote(e, actor);
     const taken = findCodeCI(snap, to);
     if (taken && taken !== from) throw new UserError(`Код «${taken}» уже занят`);
-    return new Map([
+    const changes: Changes = new Map([
       [paths.emote(from), null],
       [paths.emote(to), jsonBytes({ ...e, code: to })],
     ]);
+    updateFavEmotes(snap, changes, from, to);
+    return changes;
   };
 }
 
-export function deleteEmote(code: string): Mutation {
+/** `actor` — кто удаляет: обычный пользователь может только свой смайл (без actor — без проверки). */
+export function deleteEmote(code: string, actor?: Actor): Mutation {
   return (snap) => {
     const e = snap.emotes[code];
     if (!e) return new Map();
+    checkOwnEmote(e, actor);
     const changes: Changes = new Map([[paths.emote(code), null]]);
     gcImages(snap, changes, [e.image]);
+    updateFavEmotes(snap, changes, code, null);
     return changes;
   };
+}
+
+/**
+ * Любимые смайлы в профилях вслед за смайлом: переименованный заменяется, удалённый убирается.
+ * Иначе профиль с пропавшим смайлом нельзя сохранить («Смайла … нет в базе»).
+ */
+function updateFavEmotes(snap: Snapshot, changes: Changes, from: string, to: string | null): void {
+  for (const [key, p] of Object.entries(snap.profiles)) {
+    if (!p.favEmotes?.includes(from)) continue;
+    const favs = [...new Set(p.favEmotes.flatMap((c) => (c === from ? (to ? [to] : []) : [c])))];
+    writeProfile(changes, key, favs.length ? { ...p, favEmotes: favs } : withoutKey(p, 'favEmotes'));
+  }
 }
 
 export function addBadge(id: string, title: string, img: PreparedImage, author: string, description = ''): Mutation {
   if (!SLUG_RE.test(id)) throw new UserError('ID иконки: 2–32 символа, латиница в нижнем регистре, цифры и -');
   if (!title.trim()) throw new UserError('Укажите название иконки');
   const info = checkBadgeDescription(description);
-  return (snap) => {
+  return adminOnly((snap) => {
     if (snap.badges[id]) throw new UserError(`Иконка «${id}» уже есть`);
     const badge: Badge = { id, title: title.trim(), image: img.path, author };
     const changes: Changes = new Map([[paths.badge(id), jsonBytes(badge)]]);
@@ -131,7 +180,7 @@ export function addBadge(id: string, title: string, img: PreparedImage, author: 
     // Осталось от удалённой иконки с тем же ID — заменяем
     if (info || snap.badgeInfo[id]) changes.set(paths.badgeInfo(id), info ? jsonBytes(info) : null);
     return changes;
-  };
+  });
 }
 
 /** Чистит и проверяет описание иконки. Пустое — null. */
@@ -146,19 +195,19 @@ function checkBadgeDescription(description: string): BadgeInfo | null {
 /** Меняет описание иконки (пустое — убирает). Поля будущих версий в файле описания сохраняются. */
 export function setBadgeDescription(id: string, description: string): Mutation {
   const info = checkBadgeDescription(description);
-  return (snap) => {
+  return adminOnly((snap) => {
     if (!snap.badges[id]) throw new UserError(`Иконка «${id}» не найдена`);
     const current = snap.badgeInfo[id] ?? {};
     const next: BadgeInfo = info ? { ...current, ...info } : withoutKey(current, 'description');
     if (JSON.stringify(next) === JSON.stringify(current)) return new Map();
     const empty = Object.values(next).every((v) => v === undefined);
     return new Map([[paths.badgeInfo(id), empty ? null : jsonBytes(next)]]);
-  };
+  });
 }
 
 /** Удаляет иконку и снимает её со всех пользователей. */
 export function deleteBadge(id: string): Mutation {
-  return (snap) => {
+  return adminOnly((snap) => {
     const b = snap.badges[id];
     if (!b) return new Map();
     const changes: Changes = new Map([[paths.badge(id), null]]);
@@ -168,23 +217,23 @@ export function deleteBadge(id: string): Mutation {
     }
     gcImages(snap, changes, [b.image]);
     return changes;
-  };
+  });
 }
 
 export function savePaint(paint: Paint): Mutation {
   const parsed = PaintSchema.safeParse(paint);
   if (!parsed.success) throw new UserError('Некорректный эффект: ' + parsed.error.issues.map((i) => i.path.join('.')).join(', '));
-  return () => new Map([[paths.paint(paint.id), jsonBytes(parsed.data)]]);
+  return adminOnly(() => new Map([[paths.paint(paint.id), jsonBytes(parsed.data)]]));
 }
 
 export function deletePaint(id: string): Mutation {
-  return (snap) => {
+  return adminOnly((snap) => {
     const changes: Changes = new Map([[paths.paint(id), null]]);
     for (const [key, u] of Object.entries(snap.users)) {
       if (u.paint === id) writeUser(changes, key, { badges: u.badges });
     }
     return changes;
-  };
+  });
 }
 
 function writeUser(changes: Changes, key: string, u: UserCosmetics): void {
@@ -200,7 +249,7 @@ export function setUser(platform: Platform, nick: string, cosmetics: UserCosmeti
   const n = normalizeNick(nick);
   if (!isValidNick(platform, n)) throw new UserError(platform === 'twitch' ? 'Логин Twitch: латиница, цифры и _' : 'Некорректный ник VK Live');
   if (cosmetics.badges.length > 3) throw new UserError('Не больше 3 иконок');
-  return (snap) => {
+  return adminOnly((snap) => {
     for (const b of cosmetics.badges) if (!snap.badges[b]) throw new UserError(`Иконка «${b}» не найдена`);
     if (cosmetics.paint && !snap.paints[cosmetics.paint]) throw new UserError(`Эффект «${cosmetics.paint}» не найден`);
     const changes: Changes = new Map();
@@ -208,7 +257,7 @@ export function setUser(platform: Platform, nick: string, cosmetics: UserCosmeti
     if (cosmetics.paint) u.paint = cosmetics.paint;
     writeUser(changes, userKey(platform, n), u);
     return changes;
-  };
+  });
 }
 
 // ——— Подложки под ник ———
@@ -267,7 +316,7 @@ export function saveNameplate(input: NameplateInput, author: string, overwrite =
   }
   const parsed = NameplateSchema.safeParse(plate);
   if (!parsed.success) throw new UserError('Некорректная подложка: ' + parsed.error.issues.map((i) => i.path.join('.') || i.message).join(', '));
-  return (snap) => {
+  return adminOnly((snap) => {
     const existing = snap.nameplates[input.id];
     if (existing && !overwrite) throw new UserError(`Подложка «${input.id}» уже есть`);
     if (existing && (existing.kind === 'image' || existing.kind === 'emoji' || plate.kind === 'image' || plate.kind === 'emoji'))
@@ -275,7 +324,7 @@ export function saveNameplate(input: NameplateInput, author: string, overwrite =
     const changes: Changes = new Map([[paths.nameplate(input.id), jsonBytes(parsed.data)]]);
     if (input.image && !(input.image.path in snap.images)) changes.set(input.image.path, input.image.bytes);
     return changes;
-  };
+  });
 }
 
 export function addNameplate(input: NameplateInput, author: string): Mutation {
@@ -284,7 +333,7 @@ export function addNameplate(input: NameplateInput, author: string): Mutation {
 
 /** Удаляет подложку и снимает её со всех зрителей. */
 export function deleteNameplate(id: string): Mutation {
-  return (snap) => {
+  return adminOnly((snap) => {
     const n = snap.nameplates[id];
     if (!n) return new Map();
     const changes: Changes = new Map([[paths.nameplate(id), null]]);
@@ -293,7 +342,7 @@ export function deleteNameplate(id: string): Mutation {
     }
     if (n.image) gcImages(snap, changes, [n.image]);
     return changes;
-  };
+  });
 }
 
 function withoutKey<T extends object, K extends keyof T>(o: T, k: K): Omit<T, K> {
@@ -433,7 +482,7 @@ function infoEdit(platform: Platform, nick: string, info: ProfileInfo): ProfileE
 
 /** Назначает нику подложку (undefined — снять). Остальной профиль не трогает. */
 export function setNameplate(platform: Platform, nick: string, nameplate: string | undefined): Mutation {
-  return editProfile(platform, nick, nameplateEdit(nameplate));
+  return adminOnly(editProfile(platform, nick, nameplateEdit(nameplate)));
 }
 
 /**
@@ -441,10 +490,10 @@ export function setNameplate(platform: Platform, nick: string, nameplate: string
  * не трогает. Пустое — поля убираются (и файл, если в нём ничего не осталось).
  */
 export function setProfileInfo(platform: Platform, nick: string, info: ProfileInfo): Mutation {
-  return editProfile(platform, nick, infoEdit(platform, nick, info));
+  return adminOnly(editProfile(platform, nick, infoEdit(platform, nick, info)));
 }
 
 /** Подложка и профиль вместе (форма «Зрители»). */
 export function setProfile(platform: Platform, nick: string, p: { nameplate: string | undefined; info: ProfileInfo }): Mutation {
-  return editProfile(platform, nick, nameplateEdit(p.nameplate), infoEdit(platform, nick, p.info));
+  return adminOnly(editProfile(platform, nick, nameplateEdit(p.nameplate), infoEdit(platform, nick, p.info)));
 }

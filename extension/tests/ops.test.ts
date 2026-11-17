@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Snapshot } from '../src/git/repo';
 import {
   addBadge,
+  allowed,
+  savePaint,
   addEmote,
   addNameplate,
   combine,
@@ -70,6 +72,42 @@ describe('операции', () => {
     expect(dec(ch.get('emotes/CatDance.json')).code).toBe('CatDance');
     expect(() => renameEmote('CatJam', 'OWLYES')(snap())).toThrow('занят');
     expect(() => renameEmote('CatJam', 'catjam')(snap())).not.toThrow();
+  });
+
+  it('обычный пользователь удаляет и переименовывает только свои смайлы', () => {
+    const user = { nick: ' X ', admin: false }; // автор смайлов в снимке — «x»
+    expect(() => deleteEmote('CatJam', user)(snap())).not.toThrow();
+    expect(() => renameEmote('CatJam', 'CatDance', user)(snap())).not.toThrow();
+    const other = { nick: 'someone', admin: false };
+    expect(() => deleteEmote('CatJam', other)(snap())).toThrow('только админ');
+    expect(() => renameEmote('CatJam', 'CatDance', other)(snap())).toThrow('только админ');
+    expect(() => deleteEmote('CatJam', { nick: 'someone', admin: true })(snap())).not.toThrow();
+  });
+
+  it('иконки, эффекты и оформление зрителей — только админ; смайлы — все', () => {
+    const user = { nick: 'me', admin: false };
+    const adminActor = { nick: 'boss', admin: true };
+    expect(allowed(addEmote('NewOne', img(A), 'me'), user)).toBe(true);
+    expect(allowed(deleteEmote('CatJam'), user)).toBe(true);
+    for (const m of [deleteBadge('founder'), savePaint({ id: 'red', title: 'R', preset: 'solid', colors: ['#ff0000'] }), setUser('twitch', 'owl', { badges: [] })]) {
+      expect(allowed(m, user)).toBe(false);
+      expect(allowed(m, adminActor)).toBe(true);
+    }
+    expect(allowed(combine(addEmote('NewOne', img(A), 'me'), deleteBadge('founder')), user)).toBe(false);
+    expect(allowed(combine(addEmote('NewOne', img(A), 'me')), user)).toBe(true);
+  });
+
+  it('удаление и переименование смайла обновляют любимые смайлы в профилях', () => {
+    const s = snap();
+    s.profiles['twitch:owl']!.favEmotes = ['CatJam', 'OwlYes'];
+    s.profiles['vk:solo']!.favEmotes = ['CatJam'];
+    const renamed = renameEmote('CatJam', 'CatDance')(s);
+    expect(dec(renamed.get('profiles/twitch/owl.json')).favEmotes).toEqual(['CatDance', 'OwlYes']);
+    const deleted = deleteEmote('CatJam')(s);
+    expect(dec(deleted.get('profiles/twitch/owl.json'))).toEqual({ nameplate: 'stars', about: 'привет', favEmotes: ['OwlYes'] });
+    // Последний любимый смайл — поле убирается, остальной профиль остаётся
+    expect(dec(deleted.get('profiles/vk/solo.json'))).toEqual({ nameplate: 'strip' });
+    expect(deleteEmote('OwlYes')(snap()).has('profiles/twitch/owl.json')).toBe(false);
   });
 
   it('deleteBadge: снимает иконку с пользователей, пустых удаляет', () => {

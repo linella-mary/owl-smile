@@ -1,7 +1,10 @@
 import { unzipSync } from 'fflate';
 import { mimeByPath, toDataUrl } from '../shared/bytes';
 import type { LocalIndex } from '../shared/cache';
-import { buildIndex, snapshotFromFiles, type FileSource } from '../shared/snapshot';
+import { buildIndex, MAX_IMAGE_BYTES, snapshotFromFiles, type FileSource } from '../shared/snapshot';
+
+/** Предел распакованной базы: испорченный архив не должен подвесить док. */
+export const MAX_UNZIPPED_BYTES = 32 * 1024 * 1024;
 
 /**
  * База Owl Smile из zip-архива GitFlic (тот, что скачивает плагин OBS):
@@ -9,7 +12,16 @@ import { buildIndex, snapshotFromFiles, type FileSource } from '../shared/snapsh
  * id картинки — её путь в базе (img/<sha16>.ext): он уже уникален по содержимому.
  */
 export async function indexFromZip(zip: Uint8Array, head: string): Promise<{ index: LocalIndex; images: Record<string, string>; problems: string[] }> {
-  const files = unzipSync(zip);
+  // Файл больше предела не распаковывается: смайл с такой картинкой пропустит проверка (картинки нет)
+  let total = 0;
+  const files = unzipSync(zip, {
+    filter: (f) => {
+      if (f.originalSize > MAX_IMAGE_BYTES) return false;
+      total += f.originalSize;
+      if (total > MAX_UNZIPPED_BYTES) throw new Error('база в архиве слишком большая');
+      return true;
+    },
+  });
   const dirs = new Map<string, { name: string; id: string }[]>();
   for (const path of Object.keys(files)) {
     if (path.endsWith('/')) continue; // записи каталогов

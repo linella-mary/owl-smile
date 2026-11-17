@@ -44,4 +44,15 @@ export const twitchAdapter: ChatAdapter = {
     const gear = document.querySelector('[data-a-target="chat-settings"]');
     return gear ? outerWrapper(gear) : null;
   },
+
+  // У модератора в ряду ещё щит и меч: с совой ряд не помещается, и «Чат» уезжает на строку выше
+  toolbarWraps() {
+    const gear = document.querySelector('[data-a-target="chat-settings"]');
+    const send = document.querySelector('[data-a-target="chat-send-button"]');
+    if (!gear || !send) return false;
+    const g = gear.getBoundingClientRect();
+    const b = send.getBoundingClientRect();
+    if (!g.height || !b.height) return false;
+    return Math.abs(g.top + g.height / 2 - (b.top + b.height / 2)) > Math.max(g.height, b.height) / 2;
+  },
 };

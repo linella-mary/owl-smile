@@ -64,7 +64,7 @@ jobs:
       - name: Архив для папки плагинов OBS
         working-directory: build-plugin
         run: |
-          # release/RelWithDebInfo/owl-smile/{bin/64bit,data} → распаковывается в C:\ProgramData\obs-studio\plugins
+          # release/RelWithDebInfo/owl-smile/{bin/64bit,data} → распаковывается в %ProgramData%\obs-studio\plugins
           $out = "owl-smile-obs-$env:PLUGIN_VERSION.zip"
           Get-ChildItem release/RelWithDebInfo/owl-smile/bin/64bit -Filter *.pdb | Remove-Item
           Compress-Archive -Path release/RelWithDebInfo/owl-smile -DestinationPath $out -Force

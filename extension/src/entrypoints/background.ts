@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
 import { createBttvSync } from '../shared/bttv';
+import { migrateKey } from '../shared/key';
 import type { OwlMessage } from '../shared/messages';
 import { loadSettings, onSettingsChanged, saveSettings, type Settings } from '../shared/settings';
 import { sync } from '../sync';
@@ -52,6 +53,8 @@ export default defineBackground(() => {
   browser.runtime.onInstalled.addListener(({ reason }) => {
     void sync(true);
     void bttv.refreshAll();
+    // Ключ записи старых версий — из storage.local (его видят скрипты на страницах чата) в IndexedDB
+    void migrateKey().catch((e: unknown) => console.warn('[owl] не удалось перенести ключ', e));
     // После установки/обновления в уже открытых вкладках нашего скрипта нет (или он «осиротел») —
     // ставим сами, чтобы не нужно было обновлять страницу.
     // Firefox ставит скрипты в открытые вкладки сам — второй экземпляр рисовал бы всё дважды.

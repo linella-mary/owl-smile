@@ -7,6 +7,7 @@ import { createBttvSync } from '../shared/bttv';
 import { commitIndex, getIndex } from '../shared/cache';
 import type { OwlMessage } from '../shared/messages';
 import { browser, setMessageHandler } from './browser-shim';
+import { fixPopupClose } from './popup';
 import { base64ToBytes, indexFromZip, zipHead } from './zip-data';
 
 /**
@@ -102,4 +103,6 @@ async function main(): Promise<void> {
   log(`запущен на ${location.hostname}`);
 }
 
+// До main(): окну входа close нужен на любом адресе, а main() выходит, если для адреса нет адаптера
+fixPopupClose();
 main().catch((e: unknown) => log('ошибка запуска:', e));

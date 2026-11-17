@@ -218,6 +218,8 @@ export class EmotePicker {
 
   /** Своя кнопка (у старого экземпляра скрипта в той же вкладке — своя, с тем же id). */
   private btn: HTMLElement | null = null;
+  /** В ряду под полем ввода сове не хватило места — до перезагрузки страницы она у поля ввода. */
+  private cramped = false;
 
   constructor(
     private readonly adapter: ChatAdapter,
@@ -234,15 +236,18 @@ export class EmotePicker {
     }
     // «Под полем ввода» — в панели площадки; пока её нет (ещё не отрисована, не вошли) — у поля ввода,
     // а когда появится, кнопка переедет (вызывается на каждое изменение DOM).
-    const anchor =
-      (s.pickerPlace === 'toolbar' ? this.adapter.getPickerToolbarAnchor?.() : null) ?? this.adapter.getPickerAnchor();
+    const toolbar = s.pickerPlace === 'toolbar' && !this.cramped ? this.adapter.getPickerToolbarAnchor?.() : null;
+    const anchor = toolbar ?? this.adapter.getPickerAnchor();
     // Кнопка старого экземпляра скрипта (расширение обновили, вкладку не перезагрузили): он отрезан
     // от расширения, и нажатие на его кнопку ничего бы не открыло — убираем, ставим свою.
     for (const b of document.querySelectorAll(`[id="${BTN_ID}"]`)) if (b !== this.btn) b.remove();
     const existing = this.btn?.isConnected ? this.btn : null;
     if (existing) {
       // Пока окно открыто — не двигаем: окно стоит по месту кнопки
-      if (anchor && !this.host && existing.nextElementSibling !== anchor) anchor.before(existing);
+      if (anchor && !this.host && existing.nextElementSibling !== anchor) {
+        anchor.before(existing);
+        if (toolbar) this.leaveCrampedToolbar(existing);
+      }
       return;
     }
     if (!anchor) return;
@@ -266,6 +271,16 @@ export class EmotePicker {
     // Нажатия на кнопку — см. onPress (перехват на window, раньше обработчиков площадки)
     for (const type of PRESS_EVENTS) window.addEventListener(type, this.onPress, true);
     anchor.before(btn);
+    if (toolbar) this.leaveCrampedToolbar(btn);
+  }
+
+  /** Сова в ряду под полем ввода переполнила его (у модератора на Twitch) — переносим её к полю ввода. */
+  private leaveCrampedToolbar(btn: HTMLElement): void {
+    if (!this.adapter.toolbarWraps?.()) return;
+    const input = this.adapter.getPickerAnchor();
+    if (!input) return;
+    this.cramped = true;
+    input.before(btn);
   }
 
   /**

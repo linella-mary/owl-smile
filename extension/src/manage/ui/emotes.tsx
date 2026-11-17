@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { EMOTE_CODE_RE, isRiskyCode } from '../../shared/ids';
 import { prepareImage, type PrepareResult } from '../image';
-import { addEmote, deleteEmote, renameEmote, UserError } from '../ops';
+import { addEmote, deleteEmote, renameEmote, UserError, type Actor } from '../ops';
 import { DropZone, useRunner, type CacheView } from './common';
 
 function UploadEmote({ author }: { author: string }) {
@@ -80,7 +80,9 @@ function UploadEmote({ author }: { author: string }) {
   );
 }
 
-function EmoteCard({ code, src, author }: { code: string; src?: string; author: string }) {
+function EmoteCard({ code, src, author, actor }: { code: string; src?: string; author: string; actor: Actor }) {
+  // Чужие смайлы правит только админ (операции проверяют это и сами)
+  const mine = actor.admin || author.trim().toLowerCase() === actor.nick.trim().toLowerCase();
   const runner = useRunner();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(code);
@@ -94,7 +96,7 @@ function EmoteCard({ code, src, author }: { code: string; src?: string; author: 
           onKeyDown={(e) => {
             if (e.key === 'Escape') setRenaming(false);
             if (e.key === 'Enter' && name !== code)
-              void runner.run(`Смайл ${code} → ${name}`, renameEmote(code, name)).then((ok) => ok && setRenaming(false));
+              void runner.run(`Смайл ${code} → ${name}`, renameEmote(code, name, actor)).then((ok) => ok && setRenaming(false));
           }}
         />
       ) : (
@@ -103,20 +105,20 @@ function EmoteCard({ code, src, author }: { code: string; src?: string; author: 
         </button>
       )}
       <div class="muted small">от {author}</div>
-      <div class="tile-actions">
+      {mine && <div class="tile-actions">
         <button class="ghost xs" disabled={runner.busy} onClick={() => { setName(code); setRenaming(!renaming); }}>
           {renaming ? 'Отмена' : 'Переименовать'}
         </button>
         <button class="ghost xs danger" disabled={runner.busy}
-          onClick={() => confirm(`Удалить смайл ${code} у всех?`) && void runner.run(`Удалён смайл ${code}`, deleteEmote(code))}>
+          onClick={() => confirm(`Удалить смайл ${code} у всех?`) && void runner.run(`Удалён смайл ${code}`, deleteEmote(code, actor))}>
           Удалить
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
 
-export function EmotesTab({ cache, author }: { cache: CacheView; author: string }) {
+export function EmotesTab({ cache, author, actor }: { cache: CacheView; author: string; actor: Actor }) {
   const [q, setQ] = useState('');
   const emotes = Object.entries(cache.index?.emotes ?? {})
     .filter(([code]) => code.toLowerCase().includes(q.toLowerCase()))
@@ -131,7 +133,7 @@ export function EmotesTab({ cache, author }: { cache: CacheView; author: string 
       </div>
       <div class="grid">
         {emotes.map(([code, e]) => (
-          <EmoteCard key={code} code={code} src={cache.images[e.img]} author={e.author} />
+          <EmoteCard key={code} code={code} src={cache.images[e.img]} author={e.author} actor={actor} />
         ))}
         {!emotes.length && <div class="muted">Пока пусто</div>}
       </div>

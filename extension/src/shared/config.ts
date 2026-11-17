@@ -29,3 +29,15 @@ export const config: RepoConfig = {
 };
 
 export const isConfigured = () => Boolean(config.owner && config.repo);
+
+/**
+ * Админ (один): ник и SHA-256 его личного ключа (hex). Сам ключ в сборку не попадает.
+ * Не задан — админского режима нет, все с ключом записи могут всё (как до версии 0.6.1).
+ * Ключ и отпечаток создаёт `npm run admin:key`.
+ */
+export const admin = {
+  nick: (import.meta.env?.WXT_ADMIN_NICK ?? '').trim(),
+  keySha256: (import.meta.env?.WXT_ADMIN_KEY_SHA256 ?? '').trim().toLowerCase(),
+};
+
+export const adminEnabled = () => Boolean(admin.nick && /^[0-9a-f]{64}$/.test(admin.keySha256));

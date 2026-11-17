@@ -4,6 +4,8 @@
 #include <winhttp.h>
 
 #include <memory>
+#include <mutex>
+#include <set>
 #include <vector>
 
 namespace {
@@ -32,7 +34,49 @@ std::string last_error(const char *what)
 	return std::string(what) + " (код " + std::to_string(GetLastError()) + ")";
 }
 
+/* Запросы, которые идут сейчас: http_cancel_all закрывает их из другого потока, и ожидание
+ * в WinHttpReceiveResponse/WinHttpReadData сразу завершается ошибкой. */
+std::mutex active_mutex;
+std::set<HINTERNET> active;
+bool cancelled = false;
+
+/* Запрос в списке идущих. Закрывает его тот, кто снял со списка: поток запроса или http_cancel_all. */
+class ActiveRequest {
+public:
+	explicit ActiveRequest(HINTERNET h) : h_(h)
+	{
+		std::lock_guard<std::mutex> lock(active_mutex);
+		if (cancelled) {
+			WinHttpCloseHandle(h_);
+			h_ = nullptr;
+		} else {
+			active.insert(h_);
+		}
+	}
+	~ActiveRequest()
+	{
+		std::lock_guard<std::mutex> lock(active_mutex);
+		if (h_ && active.erase(h_))
+			WinHttpCloseHandle(h_);
+	}
+	ActiveRequest(const ActiveRequest &) = delete;
+	ActiveRequest &operator=(const ActiveRequest &) = delete;
+	HINTERNET get() const { return h_; }
+
+private:
+	HINTERNET h_;
+};
+
 } // namespace
+
+void http_cancel_all()
+{
+	std::lock_guard<std::mutex> lock(active_mutex);
+	cancelled = true;
+	for (HINTERNET h : active)
+		WinHttpCloseHandle(h);
+	active.clear();
+}
 
 bool http_get(const std::string &url, std::string &body, std::string &error, size_t max_bytes)
 {
@@ -66,10 +110,15 @@ bool http_get(const std::string &url, std::string &body, std::string &error, siz
 		return false;
 	}
 	DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-	Handle request(WinHttpOpenRequest(connect.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
-					  WINHTTP_DEFAULT_ACCEPT_TYPES, flags));
-	if (!request) {
+	HINTERNET opened = WinHttpOpenRequest(connect.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+					      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+	if (!opened) {
 		error = last_error("WinHttpOpenRequest");
+		return false;
+	}
+	ActiveRequest request(opened);
+	if (!request.get()) {
+		error = "OBS закрывается";
 		return false;
 	}
 	if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||

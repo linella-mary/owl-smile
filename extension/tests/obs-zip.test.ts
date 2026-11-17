@@ -1,6 +1,7 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { base64ToBytes, indexFromZip, zipHead } from '../src/obs/zip-data';
+import { base64ToBytes, indexFromZip, MAX_UNZIPPED_BYTES, zipHead } from '../src/obs/zip-data';
+import { MAX_IMAGE_BYTES } from '../src/shared/snapshot';
 
 const IMG_A = 'img/aaaaaaaaaaaaaaaa.webp';
 const IMG_B = 'img/bbbbbbbbbbbbbbbb.gif';
@@ -44,6 +45,27 @@ describe('база из zip для OBS', () => {
     expect(Object.keys(images).sort()).toEqual([IMG_A, IMG_B]);
     expect(images[IMG_A]).toBe('data:image/webp;base64,AQID');
     expect(images[IMG_B]!.startsWith('data:image/gif;base64,')).toBe(true);
+  });
+
+  it('слишком большая картинка не распаковывается, смайл с ней пропускается', async () => {
+    const big = 'img/dddddddddddddddd.webp';
+    const zip = zipSync({
+      'emotes/OwlYes.json': json(emote('OwlYes', IMG_A)),
+      'emotes/Huge.json': json(emote('Huge', big)),
+      [IMG_A]: new Uint8Array([1, 2, 3]),
+      [big]: new Uint8Array(MAX_IMAGE_BYTES + 1),
+    });
+    const { index, images, problems } = await indexFromZip(zip, 'h');
+    expect(Object.keys(index.emotes)).toEqual(['OwlYes']);
+    expect(Object.keys(images)).toEqual([IMG_A]);
+    expect(problems).toEqual(['emotes/Huge.json']);
+  });
+
+  it('архив, который распаковывается в слишком много данных, отклоняется', async () => {
+    const files: Record<string, Uint8Array> = {};
+    const n = Math.ceil(MAX_UNZIPPED_BYTES / MAX_IMAGE_BYTES) + 1;
+    for (let i = 0; i < n; i++) files[`img/${String(i).padStart(16, '0')}.webp`] = new Uint8Array(MAX_IMAGE_BYTES);
+    await expect(indexFromZip(zipSync(files), 'h')).rejects.toThrow('слишком большая');
   });
 
   it('отпечаток архива меняется вместе с содержимым', async () => {
